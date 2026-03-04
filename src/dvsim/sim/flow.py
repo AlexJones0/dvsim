@@ -831,6 +831,8 @@ class SimCfg(FlowCfg):
             cov_report_page = Path(cov_report_dir, self.cov_report_page)
 
         failures = BucketedFailures.from_job_status(results=run_results)
+        if failures.buckets:
+            self.errors_seen = True
 
         # --- Final result ---
         return SimFlowResults(
