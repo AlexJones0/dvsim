@@ -94,9 +94,10 @@ def gen_summary_report(summary: SimResultsSummary, path: Path) -> None:
         landing_path = f"{only_block_name}.html"
 
     # Make the HTMX report wrapper (index)
+    # Make the index page, which will redirect to the landing page.
     index = path / "index.html"
     index.write_text(
-        render_template(path="reports/wrapper.html", data={"landing_page": landing_path})
+        render_template(path="reports/index.html", data={"landing_page": landing_path})
     )
 
 
