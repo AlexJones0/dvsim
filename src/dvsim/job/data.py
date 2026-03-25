@@ -94,6 +94,11 @@ class JobSpec(BaseModel):
 
     odir: Path
     """Output directory for the job results files."""
+    renew_odir: bool
+    """Flag to indicate whether to 'overwrite' the output directory if it already exists, or to
+    backup the existing one and create a new one. We may want to leverage incremental / partition
+    compile features for tools, for example.
+    """
     log_path: Path
     """Path for the job log file."""
     links: Mapping[JobStatus, Path]
