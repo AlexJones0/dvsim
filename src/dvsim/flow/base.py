@@ -466,12 +466,20 @@ class FlowCfg(ABC):
         if isinstance(default_backend, FakeRuntimeBackend):
             default_backend.attach_fake_policy(lambda job: self._fake_policy(jobs, job))
 
+        max_timeout = max((job.timeout_mins for job in jobs if job.timeout_mins), default=0)
+
         scheduler = Scheduler(
             jobs=jobs,
             backends={default_backend.name: default_backend},
             default_backend=default_backend.name,
             max_parallelism=self.args.max_parallel,
-            # TODO: introduce a better prioritization function that accounts for timeout
+            # Prioritize by weight (decreasing), then by timeout (decreasing), then by the
+            # number of jobs that depend on this job (decreasing).
+            priority_fn=lambda job: (
+                job.spec.weight,
+                job.spec.timeout_mins or max_timeout + 1,
+                len(job.dependents),
+            ),
         )
 
         if not self.interactive:
