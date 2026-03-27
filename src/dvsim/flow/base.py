@@ -20,13 +20,11 @@ from dvsim import instrumentation
 from dvsim.flow.hjson import set_target_attribute
 from dvsim.job.data import CompletedJobStatus, JobSpec
 from dvsim.job.status import JobStatus
-from dvsim.launcher.factory import get_launcher_cls
 from dvsim.logging import log
 from dvsim.runtime.fake import FakeRuntimeBackend
 from dvsim.runtime.registry import backend_registry
-from dvsim.scheduler.async_core import Scheduler as AsyncScheduler
+from dvsim.scheduler.async_core import Scheduler
 from dvsim.scheduler.async_status_printer import create_status_printer
-from dvsim.scheduler.core import Scheduler
 from dvsim.scheduler.log_manager import LogManager
 from dvsim.utils import (
     find_and_substitute_wildcards,
@@ -38,10 +36,6 @@ if TYPE_CHECKING:
     from dvsim.job.deploy import Deploy
 
 __all__ = ("FlowCfg",)
-
-
-# Set to 1 to enable experimental use of the new async scheduler (not yet fully integrated)
-EXPERIMENTAL_ENABLE_ASYNC_SCHEDULER = os.environ.get("EXPERIMENTAL_ENABLE_ASYNC_SCHEDULER", None)
 
 
 # Interface class for extensions.
@@ -454,14 +448,7 @@ class FlowCfg(ABC):
                 ),
             )
 
-        if EXPERIMENTAL_ENABLE_ASYNC_SCHEDULER:
-            return asyncio.run(self.run_scheduler(jobs))
-
-        return Scheduler(
-            items=jobs,
-            launcher_cls=get_launcher_cls(),
-            interactive=self.interactive,
-        ).run()
+        return asyncio.run(self.run_scheduler(jobs))
 
     async def run_scheduler(self, jobs: list[JobSpec]) -> list[CompletedJobStatus]:
         """Run the scheduler with the given set of job specifications."""
@@ -473,7 +460,7 @@ class FlowCfg(ABC):
         if isinstance(default_backend, FakeRuntimeBackend):
             default_backend.attach_fake_policy(lambda job: self._fake_policy(jobs, job))
 
-        scheduler = AsyncScheduler(
+        scheduler = Scheduler(
             jobs=jobs,
             backends={default_backend.name: default_backend},
             default_backend=default_backend.name,
