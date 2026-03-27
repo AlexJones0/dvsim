@@ -44,6 +44,7 @@ from dvsim.launcher.sge import SgeLauncher
 from dvsim.launcher.slurm import SlurmLauncher
 from dvsim.logging import LOG_LEVELS, configure_logging, log
 from dvsim.runtime.registry import BackendType, backend_registry
+from dvsim.scheduler.async_status_printer import StatusPrinter
 from dvsim.scheduler.status_printer import get_status_printer
 from dvsim.utils import TS_FORMAT, TS_FORMAT_LONG, Timer, rm_path, run_cmd_with_timeout
 
@@ -916,6 +917,7 @@ def main(argv: list[str] | None = None) -> None:
 
     # Register the common deploy settings.
     Timer.print_interval = args.print_interval
+    StatusPrinter.print_interval = args.print_interval
     LocalLauncher.max_parallel = args.max_parallel
     SlurmLauncher.max_parallel = args.max_parallel
     SgeLauncher.max_parallel = args.max_parallel
