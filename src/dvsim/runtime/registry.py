@@ -8,13 +8,13 @@ from collections.abc import Callable
 from typing import Any, NewType, TypeAlias
 
 from dvsim.launcher.base import Launcher
-from dvsim.launcher.fake import FakeLauncher
 from dvsim.launcher.lsf import LsfLauncher
 from dvsim.launcher.nc import NcLauncher
 from dvsim.launcher.sge import SgeLauncher
 from dvsim.launcher.slurm import SlurmLauncher
 from dvsim.logging import log
 from dvsim.runtime.backend import RuntimeBackend
+from dvsim.runtime.fake import FakeRuntimeBackend
 from dvsim.runtime.legacy import LegacyLauncherAdapter
 from dvsim.runtime.local import LocalRuntimeBackend
 
@@ -98,7 +98,7 @@ def register_legacy_launcher_backend(name: BackendType, launcher_cls: type[Launc
 
 # Register built-in backends. TODO: migrate the legacy launchers to runtime backends.
 register_backend(BackendType("local"), LocalRuntimeBackend)
-register_legacy_launcher_backend(BackendType("fake"), FakeLauncher)
+register_backend(BackendType("fake"), FakeRuntimeBackend)
 register_legacy_launcher_backend(BackendType("lsf"), LsfLauncher)
 register_legacy_launcher_backend(BackendType("nc"), NcLauncher)
 register_legacy_launcher_backend(BackendType("sge"), SgeLauncher)
