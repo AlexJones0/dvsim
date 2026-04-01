@@ -474,6 +474,8 @@ class FlowCfg(ABC):
 
         backend = build_default_scheduler_backend(
             fake_policy=self._fake_policy,
+            min_delay=self.args.fake_min_delay,
+            max_delay=self.args.fake_max_delay,
         )
 
         # TODO: For Python 3.11 make this a StrEnum, then this conversion is not needed.

@@ -873,6 +873,20 @@ def parse_args(argv: list[str] | None = None):
         help=("Use a fake launcher that generates random results"),
     )
 
+    dvg.add_argument(
+        "--fake-min-delay",
+        type=float,
+        default=0,
+        help="The minimum time in seconds that a fake job should take.",
+    )
+
+    dvg.add_argument(
+        "--fake-max-delay",
+        type=float,
+        default=0,
+        help="The maximum time in seconds that a fake job should take.",
+    )
+
     args = parser.parse_args(argv) if argv else parser.parse_args()
 
     # Check conflicts

@@ -30,11 +30,15 @@ __all__ = (
 def build_default_scheduler_backend(
     *,
     fake_policy: FakePolicy,
+    min_delay: float | None = None,
+    max_delay: float | None = None,
 ) -> RuntimeBackend:
     """Build a runtime backend.
 
     Args:
         fake_policy: policy for generating fake data if using the fake backend
+        min_delay: the minimum time it takes to fake a test result
+        max_delay: the maximum time it takes to fake a test result
 
     Returns:
         Runtime backend to use with the scheduler.
@@ -46,6 +50,8 @@ def build_default_scheduler_backend(
     # If we're using the fake backend, tell it *how* to fake jobs for this flow.
     if isinstance(default_backend, FakeRuntimeBackend):
         default_backend.attach_fake_policy(fake_policy)
+        default_backend.min_random_time = min_delay
+        default_backend.max_random_time = max_delay
 
     return default_backend
 
