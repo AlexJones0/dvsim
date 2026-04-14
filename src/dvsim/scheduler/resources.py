@@ -6,7 +6,9 @@
 
 import asyncio
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Protocol
 
@@ -14,9 +16,15 @@ from dvsim.job.data import JobSpec, ResourceMapping
 from dvsim.logging import log
 
 __all__ = (
+    "AliasProvider",
+    "CommandProvider",
+    "CommandResult",
+    "CompositeProvider",
     "ResourceManager",
     "ResourceProvider",
+    "ScalingRule",
     "StaticResourceProvider",
+    "TimeScalingProvider",
 )
 
 
@@ -51,6 +59,189 @@ class StaticResourceProvider:
         indicates no upper bound on parallelism.
         """
         return self._limits
+
+
+class CompositeProvider:
+    """Composes multiple resource (limit) providers into a single provider interface."""
+
+    def __init__(self, *providers: ResourceProvider) -> None:
+        """Construct a CompositeProvider by composing a list of given resource providers.
+
+        Args:
+            providers: The ResourceProviders to compose.
+
+        """
+        self.providers = providers
+
+    async def get_capacity(self) -> ResourceMapping:
+        """Get the combined capacity of the resources available from this provider.
+
+        An integer capacity defines a strict limit for parallelism of that resource, whereas `None`
+        indicates no upper bound on parallelism.
+        """
+        result: ResourceMapping = {}
+        for provider in self.providers:
+            limits = await provider.get_capacity()
+            # TODO: for now we always override, it might be nice to be able to sum(), max(), min().
+            result.update(limits)
+        return result
+
+
+class AliasProvider:
+    """Provide aliases (name changes / alternative names) for existing resources."""
+
+    is_dynamic = False
+
+    def __init__(
+        self, base: ResourceProvider, aliases: Mapping[str, str], *, retain_original: bool = False
+    ) -> None:
+        """Construct an AliasProvider by wrapping a given base provider.
+
+        Args:
+            base: the wrapped ResourceProvider.
+            aliases: the aliases (original -> new) to apply.
+            retain_original: whether the existing (original) names should be kept or not.
+
+        """
+        self.base = base
+        self.is_dynamic = base.is_dynamic
+        self.aliases = aliases
+        self.retain_original = retain_original
+
+    async def get_capacity(self) -> ResourceMapping:
+        """Get the aliased capacity of the resources available from this provider.
+
+        An integer capacity defines a strict limit for parallelism of that resource, whereas `None`
+        indicates no upper bound on parallelism.
+        """
+        limits = await self.base.get_capacity()
+        aliased: ResourceMapping = limits if self.retain_original else {}
+        for original, alias in self.aliases.items():
+            if original in limits:
+                aliased[alias] = limits[original]
+        return aliased
+
+
+@dataclass(frozen=True)
+class CommandResult:
+    """The basic filtered results of running a command as a sub-process."""
+
+    return_code: int
+    stdout: str
+    stderr: str
+
+
+class CommandProvider:
+    """Provide resources as the result of running a command and parsing the resulting output."""
+
+    is_dynamic = True
+
+    def __init__(
+        self, cmd: list[str], parser: Callable[[CommandResult], ResourceMapping], ttl: float = 30.0
+    ) -> None:
+        """Construct a CommandProvider for getting resources from a command.
+
+        Args:
+            cmd: The command to be periodically run.
+            parser: How the command result should be interpreted into resource limit info.
+            ttl: The time to live (TTL) - how long the cached result exists before refreshing.
+
+        """
+        self.cmd = cmd
+        self.parser = parser
+        self.ttl = ttl
+
+        self._cache: ResourceMapping | None = None
+        self._last_update: float = 0.0
+
+    async def _run(self) -> CommandResult:
+        """Run the configured command and extract the relevant info for resource parsing."""
+        proc = await asyncio.create_subprocess_shell(
+            " ".join(self.cmd),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        return CommandResult(
+            return_code=(0 if proc.returncode is None else proc.returncode),
+            stdout=stdout.decode(errors="surrogateescape"),
+            stderr=stderr.decode(errors="surrogateescape"),
+        )
+
+    async def get_capacity(self) -> ResourceMapping:
+        """Get the dynamic capacity of the resources available from this provider.
+
+        An integer capacity defines a strict limit for parallelism of that resource, whereas `None`
+        indicates no upper bound on parallelism.
+        """
+        now = asyncio.get_event_loop().time()
+
+        if self._cache is None or (now - self._last_update) > self.ttl:
+            result = await self._run()
+            self._cache = self.parser(result)
+            self._last_update = now
+
+        return self._cache
+
+
+@dataclass(frozen=True)
+class ScalingRule:
+    """A rule for time-based scaling. Describe how to scale limits in a given timeframe."""
+
+    factor: float
+    reserve: Mapping[str, int] | int = 0  # leave this many of each resources unused
+    start_time: tuple[int, int] = (0, 0)  # (hour, minute)
+    end_time: tuple[int, int] = (23, 59)
+    weekdays: set[int] | None = None  # None = matches all days
+
+
+class TimeScalingProvider:
+    """Wrap another resource provider to scale the resource limits based on the current time."""
+
+    is_dynamic = True
+
+    def __init__(self, base: ResourceProvider, rules: Iterable[ScalingRule]) -> None:
+        """Construct a TimeScalingProvider, for scaling resource limits dynamically.
+
+        Args:
+            base: the wrapped ResourceProvider.
+            rules: the scaling rules to apply, in order of precedence.
+
+        """
+        self.base = base
+        self.rules = rules
+
+    def _match(self, now: datetime) -> ScalingRule | None:
+        """Find the scaling rule matching the given time, if any."""
+        for rule in self.rules:
+            if rule.weekdays is not None and now.weekday() not in rule.weekdays:
+                continue
+            if rule.start_time <= (now.hour, now.minute) <= rule.end_time:
+                return rule
+        return None
+
+    async def get_capacity(self) -> ResourceMapping:
+        """Get the scaled capacity of the resources available from this provider.
+
+        An integer capacity defines a strict limit for parallelism of that resource, whereas `None`
+        indicates no upper bound on parallelism.
+        """
+        base_limits = await self.base.get_capacity()
+        rule = self._match(datetime.now(tz=timezone.utc))
+        if rule is None:
+            return base_limits
+
+        scaled = {}
+        for resource, limit in base_limits.items():
+            if limit is None:
+                scaled[resource] = None
+                continue
+            scaled_val = int(limit * rule.factor)
+            reserved = (
+                rule.reserve if isinstance(rule.reserve, int) else rule.reserve.get(resource, 0)
+            )
+            scaled[resource] = min(scaled_val, max(limit - reserved, 0))
+        return scaled
 
 
 class UnknownResourcePolicy(str, Enum):

@@ -479,7 +479,8 @@ class FlowCfg(ABC):
         # TODO: For Python 3.11 make this a StrEnum, then this conversion is not needed.
         missing_policy = UnknownResourcePolicy(self.args.on_missing_resource)
         resource_manager = build_resource_manager(
-            resource_limits=dict(self.args.resource_limits or ()),
+            resource_config=self.args.resource_config,
+            static_resource_limits=dict(self.args.resource_limits or ()),
             missing_policy=missing_policy,
         )
 

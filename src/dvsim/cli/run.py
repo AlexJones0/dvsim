@@ -454,7 +454,13 @@ def parse_args(argv: list[str] | None = None):
         type=parse_resource,
         dest="resource_limits",
         action="append",
-        help="Set a limit for a resource (repeatable), e.g. --resource A=30 or -R B=unlimited.",
+        help="Set a static limit for a resource (repeatable), e.g. --resource A=30 or -R B=unlimited.",
+    )
+
+    resources.add_argument(
+        "--resource-config",
+        type=Path,
+        help="Alternative to --resource, set a custom resource configuration via a Python config.",
     )
 
     resources.add_argument(

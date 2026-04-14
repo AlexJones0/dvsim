@@ -4,16 +4,21 @@
 
 """Schedule runner."""
 
+import importlib.util
 from collections.abc import Iterable
+from pathlib import Path
+from types import ModuleType
 
 from dvsim import instrumentation
 from dvsim.job.data import CompletedJobStatus, JobSpec
+from dvsim.logging import log
 from dvsim.runtime.backend import RuntimeBackend
 from dvsim.runtime.fake import FakePolicy, FakeRuntimeBackend
 from dvsim.runtime.registry import backend_registry
 from dvsim.scheduler.core import Scheduler
 from dvsim.scheduler.log_manager import LogManager
 from dvsim.scheduler.resources import (
+    CompositeProvider,
     ResourceManager,
     ResourceMapping,
     StaticResourceProvider,
@@ -50,22 +55,59 @@ def build_default_scheduler_backend(
     return default_backend
 
 
+def load_config_module(path: Path) -> ModuleType | None:
+    """Load a Python plugin configuration module via importlib."""
+    spec = importlib.util.spec_from_file_location("cfg", path)
+    if spec is None:
+        return None
+
+    module = importlib.util.module_from_spec(spec)
+    if spec.loader is None:
+        return None
+
+    spec.loader.exec_module(module)
+    return module
+
+
 def build_resource_manager(
     *,
-    resource_limits: ResourceMapping,
+    resource_config: Path | None,
+    static_resource_limits: ResourceMapping,
     missing_policy: UnknownResourcePolicy,
 ) -> ResourceManager | None:
     """Build a resource manager for use with the scheduler and validate the given jobs' resources.
 
     Args:
-        resource_limits: The list of static resource limits to impose on the scheduler.
+        resource_config: Path to a Python config plugin containing the resource provider.
+        static_resource_limits: Final static resource limits to impose on the scheduler.
         missing_policy: How to handle requested job resources without any defined limits.
 
     """
-    if not resource_limits and missing_policy == UnknownResourcePolicy.IGNORE:
+    if (
+        resource_config is None
+        and not static_resource_limits
+        and missing_policy == UnknownResourcePolicy.IGNORE
+    ):
         return None
 
-    provider = StaticResourceProvider(resource_limits)
+    providers = []
+
+    if resource_config is not None:
+        module = load_config_module(resource_config)
+        if module is not None:
+            providers.append(module.build_provider())
+        else:
+            log.warn("Could not load resource configuration for %s", str(resource_config))
+
+    # Any (command-line) static resource limits should override the given resource config.
+    if static_resource_limits:
+        providers.append(StaticResourceProvider(static_resource_limits))
+
+    if not providers:
+        return None
+    if len(providers) == 1:
+        return ResourceManager(providers[0], missing_policy)
+    provider = CompositeProvider(*providers)
     return ResourceManager(provider, missing_policy)
 
 
