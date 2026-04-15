@@ -8,9 +8,11 @@ import re
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, get_args
 
+from dvsim.job.data import ResourceMapping
 from dvsim.sim.data import CodeCoverageMetrics, CoverageMetrics
+from dvsim.sim.tool.base import SimStage
 
 if TYPE_CHECKING:
     from dvsim.job.deploy import Deploy
@@ -162,6 +164,26 @@ class Xcelium:
                 fsm=raw_metrics.get("fsm"),
             ),
         )
+
+    @staticmethod
+    def get_job_resources(stage: SimStage) -> ResourceMapping | None:
+        """Get the resources (licenses) that are used for a given sim job stage.
+
+        Args:
+            stage: the simulation flow job stage to get resources for.
+
+        Returns:
+            a Mapping of (resource_name -> resource_count) used for a job in this configuration,
+            or None if no mapping is defined for this stage.
+
+        """
+        # We just use "XCELIUM" to generically refer to Xcelium single core, as we assume
+        # that all jobs run using a single core.
+        if stage == "cov_unr":
+            return {"XCELIUM": 1, "JASPER": 1}
+        if stage in get_args(SimStage):
+            return {"XCELIUM": 1}
+        return None
 
     @staticmethod
     def set_additional_attrs(deploy: "Deploy") -> None:

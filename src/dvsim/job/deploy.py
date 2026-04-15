@@ -237,8 +237,14 @@ class Deploy:
         """
         self._extract_attrs(self.sim_cfg.__dict__)
 
-        # TODO: Use the configured tool to determine the resources (licenses) that are required
+        # Use the configured tool to determine the resources (licenses) that are required
         self.resources = None
+        if self.sim_cfg.flow == "sim" and self.target and self.target != "none":
+            try:
+                plugin = get_sim_tool_plugin(tool=self.sim_cfg.tool)
+                self.resources = plugin.get_job_resources(self.target)
+            except NotImplementedError as e:
+                log.info("Sim tool plugin not implemented for %s: %s", self.sim_cfg.tool, str(e))
 
         # Enable GUI mode, also when GUI debug mode has been invoked.
         self.gui = self.sim_cfg.gui

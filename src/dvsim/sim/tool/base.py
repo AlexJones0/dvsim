@@ -6,14 +6,19 @@
 
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
+from dvsim.job.data import ResourceMapping
+from dvsim.modes import Mode
 from dvsim.sim.data import CoverageMetrics
 
 if TYPE_CHECKING:
     from dvsim.job.deploy import Deploy
 
-__all__ = ("SimTool",)
+__all__ = ("SimStage", "SimTool")
+
+# Stage of the simulation flow
+SimStage = Literal["build", "run", "cov_unr", "cov_merge", "cov_report", "cov_analyze"]
 
 
 @runtime_checkable
@@ -82,6 +87,21 @@ class SimTool(Protocol):
 
         Returns:
             CoverageMetrics model.
+
+        """
+        ...
+
+    @staticmethod
+    def get_job_resources(stage: SimStage, mode: Mode | None = None) -> ResourceMapping | None:
+        """Get the resources (licenses) that are used for a given sim job stage.
+
+        Args:
+            stage: the simulation flow job stage to get resources for.
+            mode: the mode of operation being used to run the job.
+
+        Returns:
+            a Mapping of (resource_name -> resource_count) used for a job in this configuration,
+            or None if no mapping is defined for this stage/mode.
 
         """
         ...

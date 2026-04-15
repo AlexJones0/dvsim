@@ -9,7 +9,9 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from dvsim.job.data import ResourceMapping
 from dvsim.sim.data import CodeCoverageMetrics, CoverageMetrics
+from dvsim.sim.tool.base import SimStage
 
 if TYPE_CHECKING:
     from dvsim.job.deploy import Deploy
@@ -136,6 +138,27 @@ class VCS:
                 fsm=raw_metrics.get("fsm"),
             ),
         )
+
+    @staticmethod
+    def get_job_resources(stage: SimStage) -> ResourceMapping | None:
+        """Get the resources (licenses) that are used for a given sim job stage.
+
+        Args:
+            stage: the simulation flow job stage to get resources for.
+
+        Returns:
+            a Mapping of (resource_name -> resource_count) used for a job in this configuration,
+            or None if no mapping is defined for this stage.
+
+        """
+        match stage:
+            case "build" | "run" | "cov_merge" | "cov_report":
+                return {"VCS": 1}
+            case "cov_unr":
+                return {"VCS": 1, "VCS_FORMAL": 1}
+            case "cov_analyze":
+                return {"VERDI": 1}
+        return None
 
     @staticmethod
     def set_additional_attrs(deploy: "Deploy") -> None:

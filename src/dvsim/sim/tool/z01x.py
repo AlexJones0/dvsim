@@ -6,6 +6,8 @@
 
 from typing import TYPE_CHECKING
 
+from dvsim.job.data import ResourceMapping
+from dvsim.sim.tool.base import SimStage
 from dvsim.sim.tool.vcs import VCS
 
 if TYPE_CHECKING:
@@ -16,6 +18,24 @@ __all__ = ("Z01X",)
 
 class Z01X(VCS):
     """Implement Z01X tool support."""
+
+    @staticmethod
+    def get_job_resources(stage: SimStage) -> ResourceMapping | None:
+        """Get the resources (licenses) that are used for a given sim job stage.
+
+        Args:
+            stage: the simulation flow job stage to get resources for.
+            mode: the mode of operation being used to run the job.
+
+        Returns:
+            a Mapping of (resource_name -> resource_count) used for a job in this configuration,
+            or None if no mapping is defined for this stage.
+
+        """
+        resources = VCS.get_job_resources(stage)
+        if resources is not None:
+            resources["Z01X"] = 1
+        return resources
 
     @staticmethod
     def set_additional_attrs(deploy: "Deploy") -> None:
