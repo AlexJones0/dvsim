@@ -4,10 +4,16 @@
 
 """DVSim scheduler instrumentation base classes."""
 
-from collections.abc import Iterable, Sequence
-from dataclasses import asdict, dataclass
-from typing import Any, TypeAlias
+from collections import defaultdict
+from collections.abc import Iterable, Mapping
 
+from dvsim.instrumentation.records import (
+    InstrumentationResults,
+    JobInstrumentationResults,
+    JobMetrics,
+    SchedulerInstrumentationResults,
+    SchedulerMetrics,
+)
 from dvsim.job.data import JobSpec
 from dvsim.job.status import JobStatus
 from dvsim.logging import log
@@ -15,38 +21,8 @@ from dvsim.scheduler.core import Scheduler
 
 __all__ = (
     "InstrumentationAggregator",
-    "InstrumentationFragment",
-    "InstrumentationFragments",
-    "JobFragment",
-    "SchedulerFragment",
     "SchedulerInstrumentation",
 )
-
-
-@dataclass
-class InstrumentationFragment:
-    """Base class for instrumentation reports / report fragments."""
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert the report fragment to a dictionary."""
-        return asdict(self)
-
-
-@dataclass
-class SchedulerFragment(InstrumentationFragment):
-    """Base class for instrumentation report fragments related to the scheduler."""
-
-
-@dataclass
-class JobFragment(InstrumentationFragment):
-    """Base class for instrumentation report fragments related to individual jobs."""
-
-    job: JobSpec
-
-
-# Each instrumentation object can report any number of information fragments about the
-# scheduler and about its jobs.
-InstrumentationFragments: TypeAlias = tuple[Sequence[SchedulerFragment], Sequence[JobFragment]]
 
 
 class SchedulerInstrumentation:
@@ -56,10 +32,7 @@ class SchedulerInstrumentation:
     behavioural metrics for analysis.
     """
 
-    @property
-    def name(self) -> str:
-        """The name to use to refer to this instrumentation mechanism."""
-        return self.__class__.__name__
+    name: str = ""
 
     def start(self) -> None:
         """Begin instrumentation, starting whatever is needed before the scheduler is run."""
@@ -89,9 +62,13 @@ class SchedulerInstrumentation:
         """Notify instrumentation of a change in status for some scheduled job."""
         return
 
-    def build_report_fragments(self) -> InstrumentationFragments | None:
-        """Build report fragments from the collected instrumentation information."""
+    def get_scheduler_data(self) -> SchedulerMetrics | None:
+        """Retrieve scheduler metrics measured by this instrumentation."""
         return None
+
+    def get_job_data(self) -> Mapping[str, JobMetrics]:
+        """Retrieve per-job metrics measured by this instrumentation."""
+        return {}
 
 
 class InstrumentationAggregator:
@@ -118,40 +95,28 @@ class InstrumentationAggregator:
         for inst in self._instrumentations:
             inst.stop()
 
-    def collect(self) -> dict[str, Any]:
+    def collect(self) -> InstrumentationResults:
         """Collect all gathered instrumentation data from the wrapped objects."""
-        log.info("Collecting instrumentation data...")
+        log.info("Collecting instrumentation report data...")
 
-        scheduler_fragments = []
-        job_fragments = []
+        scheduler_metrics: dict[str, SchedulerMetrics] = {}
+        job_metrics: dict[str, dict[str, JobMetrics]] = defaultdict(dict)
 
-        for inst in self._instrumentations:
-            fragments = inst.build_report_fragments()
-            if fragments is None:
-                continue
-            scheduler_fragments += fragments[0]
-            job_fragments += fragments[1]
-
-        log.info("Finished collecting instrumentation data. Merging instrumentation data...")
-
-        scheduler: dict[str, Any] = {}
-        for i, scheduler_frag in enumerate(scheduler_fragments, start=1):
+        for i, inst in enumerate(self._instrumentations, start=1):
             log.debug(
-                "Merging instrumentation report scheduler data (%d/%d)", i, len(scheduler_fragments)
+                "Collecting instrumentation report data (%d/%d)", i, len(self._instrumentations)
             )
-            scheduler.update(scheduler_frag.to_dict())
+            scheduler_record = inst.get_scheduler_data()
+            if scheduler_record is not None:
+                scheduler_metrics[inst.name] = scheduler_record
+            for job_id, job_record in inst.get_job_data().items():
+                job_metrics[job_id][inst.name] = job_record
 
-        jobs: dict[tuple[str, str], dict[str, Any]] = {}
-        for i, job_frag in enumerate(job_fragments, start=1):
-            log.debug("Merging instrumentation report job data (%d/%d)", i, len(job_fragments))
-            spec = job_frag.job
-            # We can uniquely identify jobs from the combination of their full name & target
-            job_id = (spec.full_name, spec.target)
-            job = jobs.get(job_id)
-            if job is None:
-                job = {}
-                jobs[job_id] = job
-            job.update({k: v for k, v in job_frag.to_dict().items() if k != "job"})
-
-        log.info("Finished merging instrumentation report data.")
-        return {"scheduler": scheduler, "jobs": list(jobs.values())}
+        log.info("Finished collecting instrumentation report data.")
+        return InstrumentationResults(
+            scheduler=SchedulerInstrumentationResults(**scheduler_metrics),  # type: ignore[reportArgumentType]
+            jobs={
+                job_id: JobInstrumentationResults(**job_data)  # type: ignore[reportArgumentType]
+                for job_id, job_data in job_metrics.items()
+            },
+        )
