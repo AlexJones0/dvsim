@@ -5,37 +5,37 @@
 """DVSim Scheduler Instrumentation."""
 
 from dvsim.instrumentation.base import InstrumentationAggregator, SchedulerInstrumentation
+from dvsim.instrumentation.compute import ComputeInstrumentation
 from dvsim.instrumentation.factory import InstrumentationFactory
 from dvsim.instrumentation.metadata import MetadataInstrumentation
 from dvsim.instrumentation.records import (
     InstrumentationMetrics,
     InstrumentationResults,
+    JobComputeMetrics,
     JobInstrumentationMetadata,
     JobMetrics,
-    JobResourceMetrics,
     JobTimingMetrics,
+    SchedulerComputeMetrics,
     SchedulerMetrics,
-    SchedulerResourceMetrics,
     SchedulerTimingMetrics,
 )
-from dvsim.instrumentation.resources import ResourceInstrumentation
 from dvsim.instrumentation.runtime import flush, get, set_instrumentation, set_report_path
 from dvsim.instrumentation.timing import TimingInstrumentation
 
 __all__ = (
+    "ComputeInstrumentation",
     "InstrumentationAggregator",
     "InstrumentationFactory",
     "InstrumentationMetrics",
     "InstrumentationResults",
+    "JobComputeMetrics",
     "JobInstrumentationMetadata",
     "JobMetrics",
-    "JobResourceMetrics",
     "JobTimingMetrics",
     "MetadataInstrumentation",
-    "ResourceInstrumentation",
+    "SchedulerComputeMetrics",
     "SchedulerInstrumentation",
     "SchedulerMetrics",
-    "SchedulerResourceMetrics",
     "SchedulerTimingMetrics",
     "TimingInstrumentation",
     "flush",
