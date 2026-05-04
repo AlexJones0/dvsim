@@ -30,6 +30,11 @@ curl -L -o "$TARGET_DIR/js/bootstrap.bundle.min.js" \
 curl -L -o "$TARGET_DIR/js/htmx.min.js" \
     https://cdn.jsdelivr.net/npm/htmx.org@latest/dist/htmx.min.js
 
+# plotly (no up-to-date latest version tagged, pinned at 3.5.0)
+echo "INFO: Plotly is pinned at version 3.5.0, consider checking for a newer version"
+curl -L -o "$TARGET_DIR/js/plotly.min.js" \
+    https://cdn.plot.ly/plotly-3.5.0.min.js
+
 echo "Done! Files saved to:"
 echo "  - $TARGET_DIR/css/bootstrap.min.css"
 echo "  - $TARGET_DIR/js/bootstrap.bundle.min.js"
