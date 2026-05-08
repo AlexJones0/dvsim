@@ -31,6 +31,7 @@ dependencies = [
     # If updating plotly, make sure to update the fixed minified JS in
     # src/dvsim/templates/static/js/plotly.min.js to avoid any breakage
     "plotly>=6.7.0",
+    "kaleido>=1.2.0",
     # Needed for Self while supporting Python 3.10
     "typing-extensions>=4.15.0",
 ]
