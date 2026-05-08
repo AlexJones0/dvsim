@@ -621,7 +621,7 @@ class LongestJobsVisualization:
         num_jobs = len(job_timings)
         num_groups = len(group_durations)
         item_type = "jobs" if self.test_group_fn is None else "tests"
-        if num_groups <= self.max_bars:
+        if self.max_bars is None or num_groups <= self.max_bars:
             num_visible_items = num_groups
             y_range = None
             title_job_desc = f"{num_groups:,} {item_type}"
@@ -748,6 +748,8 @@ class LongestJobsVisualization:
                     job_key = (
                         self.category_fn(results.jobs[job_id]) if key == "All categories" else key
                     )
+                    # TODO: not a particularly nice way to handle the 'None' case.
+                    job_key = job_key or "All categories"
 
                     durations.append(timings.duration)
                     hovers.append(hover)
@@ -794,24 +796,26 @@ class LongestJobsVisualization:
             margin=self.MARGINS,
             bargap=0.05,
             showlegend=False,
-            # barmode="stack",  # TODO use and explain with grouped bars
-            updatemenus=[
-                dict(
-                    type=updatemenu_type,
-                    direction=updatemenu_direction,
-                    bgcolor="rgba(230,230,230,0.9)",
-                    bordercolor="rgba(0,0,0,0)",
-                    borderwidth=0,
-                    pad=dict(r=8, t=0, b=0),
-                    font=dict(size=13),
-                    showactive=True,
-                    x=0.0,
-                    xanchor="left",
-                    y=1.055,  # TODO: magic constants
-                    buttons=menu_buttons,
-                )
-            ],
         )
+        if len(menu_buttons) > 1:
+            fig.update_layout(
+                updatemenus=[
+                    dict(
+                        type=updatemenu_type,
+                        direction=updatemenu_direction,
+                        bgcolor="rgba(230,230,230,0.9)",
+                        bordercolor="rgba(0,0,0,0)",
+                        borderwidth=0,
+                        pad=dict(r=8, t=0, b=0),
+                        font=dict(size=13),
+                        showactive=True,
+                        x=0.0,
+                        xanchor="left",
+                        y=1.055,  # TODO: magic constants
+                        buttons=menu_buttons,
+                    )
+                ],
+            )
         fig.update_yaxes(autorange="reversed")
         fig.update_xaxes(title="Duration (s)", showgrid=True)
         if y_range:  # TODO: is still needed?
@@ -1203,7 +1207,7 @@ class PieBreakdownVisualization:
         fig.update_legends(
             title=self.group_type.capitalize(),
             x=1.02,
-            y=0.3,
+            y=row_heights[1] * 0.4,
             xanchor="left",
             yanchor="middle",
         )
@@ -1231,7 +1235,7 @@ class PieBreakdownVisualization:
 class ToolPieBreakdown(PieBreakdownVisualization):
     """TODO"""
 
-    title = "Tool Breakdown"
+    title = "Runtime per Tool"
 
     def __init__(self) -> None:
         """TODO"""
@@ -1253,16 +1257,13 @@ class ToolPieBreakdown(PieBreakdownVisualization):
         if fig is None:
             return None
 
-        fig.update_layout(title_text="<b>Total job runtime per tool</b>", title_x=0.5)
-        fig.update_legends(title="Tool")
-
         return fig.to_html(full_html=False, include_plotlyjs=False)
 
 
 class BlockVariantPieBreakdown(PieBreakdownVisualization):
     """TODO"""
 
-    title = "Block Breakdown"
+    title = "Runtime per Block"
 
     def __init__(self) -> None:
         """TODO"""
@@ -1275,23 +1276,48 @@ class BlockVariantPieBreakdown(PieBreakdownVisualization):
 
         return job.meta.block + (f"_{job.meta.block_variant}" if job.meta.block_variant else "")
 
+    def render(self, results: InstrumentationResults) -> str | None:
+        """TODO"""
+        if all(job.meta is None for job in results.jobs.values()):
+            return None
+
+        fig = self._build(results)
+        if fig is None:
+            return None
+
+        return fig.to_html(full_html=False, include_plotlyjs=False)
+
 
 # Register default / built-in instrumentation visualizations
 # TODO: maybe look at reworking protocol and just give name here, the class structure is kind of weird
-register_instrumentation_visualizer(LongestJobsByStatusVisualization(max_bars=250))
-register_instrumentation_visualizer(LongestJobsByToolVisualization(max_bars=250))
-register_instrumentation_visualizer(
-    LongestJobsByToolVisualization(max_bars=75, max_jobs_per_bar=6, group_tests=True)
-)
-register_instrumentation_visualizer(LongestJobsByBlockVisualization(max_bars=50))
-register_instrumentation_visualizer(
-    LongestJobsByBlockVisualization(max_bars=20, max_jobs_per_bar=6, group_tests=True)
-)
-register_instrumentation_visualizer(BlockVariantPieBreakdown())
-register_instrumentation_visualizer(ToolPieBreakdown())
-register_instrumentation_visualizer(ToolConcurrencyVisualization())
-register_instrumentation_visualizer(TimingGanttVisualization())
-register_instrumentation_visualizer(ParallelismVisualization())
+def get_standard_instrumentations(*, uncapped: bool = False) -> list[InstrumentationVisualizer]:
+    """TODO"""
+    # TODO: this uncapped stuff is a mess, figure out a nicer way.
+    return [
+        LongestJobsByStatusVisualization(max_bars=(None if uncapped else 250)),
+        LongestJobsByToolVisualization(max_bars=(None if uncapped else 250)),
+        LongestJobsByToolVisualization(
+            group_tests=True,
+            max_bars=(None if uncapped else 75),
+            max_jobs_per_bar=(None if uncapped else 6),
+        ),
+        LongestJobsByBlockVisualization(max_bars=(None if uncapped else 50)),
+        LongestJobsByBlockVisualization(
+            group_tests=True,
+            max_bars=(None if uncapped else 20),
+            max_jobs_per_bar=(None if uncapped else 6),
+        ),
+        BlockVariantPieBreakdown(),
+        ToolPieBreakdown(),
+        ToolConcurrencyVisualization(),
+        TimingGanttVisualization(),
+        ParallelismVisualization(),
+    ]
+
+
+# TODO: what should I do with the registry: empty by default? add by default
+for standard_vis in get_standard_instrumentations():
+    register_instrumentation_visualizer(standard_vis)
 
 
 # Local testing, TODO remove the below
@@ -1394,9 +1420,9 @@ if __name__ == "__main__":
                 continue
             report = InstrumentationResults.model_validate_json(results_path.read_text())
             print(f"Finished loading given instrumentation report: {results_path}")
-            _outdir = Path("./real_metrics/generated") / results_path.name
+            _outdir = Path("./real_metrics/generated") / results_path.name.removesuffix(".json")
             _artifacts = render_html_report(
-                report, visualizations=get_visualization_registry(), outdir=_outdir
+                report, visualizations=get_standard_instrumentations(), outdir=_outdir
             )
             print(f"Historic instrumentation report data written under {_outdir}")
     else:
@@ -1422,6 +1448,6 @@ if __name__ == "__main__":
             print("Finished making fake report. Rendering HTML visualizations...")
             _outdir = Path("./mock_metrics", str(_num_fake_jobs).rjust(6, "0"))
             _artifacts = render_html_report(
-                _fake_report, visualizations=get_visualization_registry(), outdir=_outdir
+                _fake_report, visualizations=get_standard_instrumentations(), outdir=_outdir
             )
             print(f"Fake instrumentation report data written under {_outdir}")
