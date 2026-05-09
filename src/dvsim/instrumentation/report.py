@@ -52,6 +52,12 @@ DEFAULT_PNG_THRESHOLD: int = 1000
 PNG_SCALE_SQRT_DIVIDER: int = 1000
 PNG_SCALE_FACTOR: float = 2.0
 
+# Standard plotly kwargs for rendering a HTML figure as a instrumentation report fragment.
+PLOTLY_HTML_FRAGMENT_CONFIG: dict[str, Any] = {
+    "full_html": False,
+    "include_plotlyjs": False,
+}
+
 # Standard plotly timing tick config options
 PLOTLY_TIMING_AXIS_CONFIG: dict[str, Any] = {
     "title": "Time (s)",
@@ -965,118 +971,144 @@ class LongestJobsByBlockVisualization(LongestTestsVisualization):
         return job.meta.block
 
 
-class ConcurrencyVisualization:
-    """TODO"""
+# Default height in pixels for a usage/concurrency chart visualization
+DEFAULT_USAGE_CHART_HEIGHT_PX: int = 800
+
+
+class ConcurrencyLineGraph:
+    """Renders plotly time series figures showing usage & concurrency info over time."""
 
     title = "Job Concurrency"
 
     def __init__(
-        self, *, group_fn: Callable[[JobInstrumentationResults], str | None] | None = None
+        self, *, group_fn: Callable[[JobInstrumentationResults], str] | None = None
     ) -> None:
-        """TODO"""
-        self.group_fn = group_fn
+        """Construct a ConcurrencyLineGraph.
+
+        Args:
+            group_fn: A function to partition jobs into distinct (non-overlapping) subsets,
+              by the category string that is returned. Defaults to `None`, meaning that no
+              partitioning is applied.
+
+        """
+        self.group_fn: Callable[[JobInstrumentationResults], str] | None = group_fn
 
     def concurrency_events(
-        self, job_timings: dict[str, JobTimingMetrics]
+        self, job_timings: dict[str, ConcreteJobTimingMetrics]
     ) -> list[tuple[float, int]]:
-        """TODO"""
+        """Retrieve a list of concurrency events (changes in concurrency) for the given timings.
+
+        Args:
+            job_timings: A mapping of job IDs to timing metrics to get concurrency for.
+
+        Returns:
+            An ordered time-series list of tuples (time in seconds, active concurrent jobs).
+
+        """
         start_times = [(timing.start_time, 1) for timing in job_timings.values()]
         end_times = [(timing.end_time, -1) for timing in job_timings.values()]
         job_events = sorted(start_times + end_times)
 
-        concurrency_events = []
+        concurrency_events: list[tuple[float, int]] = []
         concurrency = 0
         for event_time, concurrency_diff in job_events:
-            concurrency += concurrency_diff  # cumulative sum so far
+            concurrency += concurrency_diff  # (cumulative sum so far)
             concurrency_events.append((event_time, concurrency))
 
         return concurrency_events
 
     def _build(self, results: InstrumentationResults) -> Figure | None:
-        """TODO"""
+        """Build the plotly time series line graph figure for the given results."""
         job_timings = results.job_timings()
         if not job_timings:
             return None
 
         run_start_time, run_end_time = results.get_run_time_info()
+        run_duration = run_end_time - run_start_time
 
-        # Group items into subsets
-        subsets: dict[str, list[str]] = defaultdict(list)
+        # Group jobs into subsets keyed by the configured `group_fn`.
+        categories: dict[str, list[str]] = defaultdict(list)
         for job_id in job_timings:
             if self.group_fn is not None:
-                # TODO: handle None better
-                key = self.group_fn(results.jobs[job_id]) or "Unknown"
-                subsets[key].append(job_id)
+                key = self.group_fn(results.jobs[job_id])
+                categories[key].append(job_id)
             else:
-                subsets["Concurrent Jobs"].append(job_id)
-        color_map = make_repeating_color_map(sorted(subsets), pc.qualitative.Plotly)
+                categories["Concurrent Jobs"].append(job_id)
+        categories = dict(sorted(categories.items()))
+        color_map = make_repeating_color_map(categories, pc.qualitative.Plotly)
 
-        # Get concurrency events and plot them on the graph
         # For each group, get concurrency events and plot them as a trace.
         fig = go.Figure()
-
-        for subset, jobs in subsets.items():
+        for key, jobs in categories.items():
             subset_timings = {job_id: job_timings[job_id] for job_id in jobs}
             concurrency_events = self.concurrency_events(subset_timings)
+            event_times = [event[0] - run_start_time for event in concurrency_events]
+            concurrency_vals = [event[1] for event in concurrency_events]
 
             fig.add_scatter(
-                x=[event[0] - run_start_time for event in concurrency_events],
-                y=[event[1] for event in concurrency_events],
+                x=event_times,
+                y=concurrency_vals,
+                name=key,
                 mode="lines",
-                name=subset,
-                marker=dict(color=color_map[subset]),
+                marker={"color": color_map[key]},
             )
 
         # Extra layout / formatting settings
+        height = min(DEFAULT_USAGE_CHART_HEIGHT_PX, DEFAULT_VISUALIZATION_HEIGHT_PX)
         fig.update_layout(
             template="plotly_white",
             title_text="<b>Job Concurrency over Time</b>",
             title_x=0.5,
-            margin=dict(t=40),
-            height=min(800, DEFAULT_VISUALIZATION_HEIGHT_PX),
-            hovermode="x unified",
+            margin={"t": 40},
+            height=height,
         )
-        fig.update_yaxes(title="Number of Concurrent Jobs", tickformat=",", showgrid=True)
-        fig.update_xaxes(
-            title="Time (s)",
-            tickformat=",",
-            ticks="outside",
-            tickwidth=1,
-            tickcolor="black",
-            ticklen=4,
-            showgrid=True,
-            range=[0, run_end_time - run_start_time],
-        )
+        fig.update_yaxes(title="Number of Concurrent Jobs", showgrid=True, tickformat=",")
+        fig.update_xaxes(range=[0, run_duration], showgrid=True, **PLOTLY_TIMING_AXIS_CONFIG)
+
+        # If we have multiple categories, show information about all series when hovering
+        if len(categories) > 1:
+            fig.update_layout(hovermode="x unified")
 
         return fig
 
     def render(self, results: InstrumentationResults) -> str | None:
-        """TODO"""
+        """Render a time series line graph from the instrumentation results as a HTML fragment.
+
+        If the required job timing information is not available (or there are no jobs), just
+        returns `None` instead.
+
+        """
         fig = self._build(results)
         if fig is None:
             return None
 
-        return fig.to_html(full_html=False, include_plotlyjs=False)
+        # Always render as HTML; we need > 100k jobs to make considering a PNG worthwhile.
+        return fig.to_html(**PLOTLY_HTML_FRAGMENT_CONFIG)
 
 
-class ToolConcurrencyVisualization(ConcurrencyVisualization):
-    """TODO"""
+class ToolUsageLineGraph(ConcurrencyLineGraph):
+    """Time series chart showing concurrent tool usage over the run's lifetime."""
 
     title = "Tool Concurrency"
 
     def __init__(self) -> None:
-        """TODO"""
+        """Construct a ToolUsageLineGraph."""
         super().__init__(group_fn=self._get_job_tool)
 
     def _get_job_tool(self, job: JobInstrumentationResults) -> str:
-        """TODO"""
+        """Get the tool from a job's recorded metadata, or 'Unknown' if it does not exist."""
         if job.meta is None:
             return "Unknown"
 
         return job.meta.tool
 
     def render(self, results: InstrumentationResults) -> str | None:
-        """TODO"""
+        """Render a tool usage line graph from the instrumentation results as a HTML fragment.
+
+        If the required job timing or metadata information is not available (or there are no
+        jobs), just returns `None` instead.
+
+        """
         if all(job.meta is None for job in results.jobs.values()):
             return None
 
@@ -1084,12 +1116,10 @@ class ToolConcurrencyVisualization(ConcurrencyVisualization):
         if fig is None:
             return None
 
-        fig.update_layout(
-            title_text="<b>Tool Concurrency over Time</b>",
-        )
+        fig.update_layout(title_text="<b>Tool Concurrency over Time</b>")
         fig.update_legends(title="Tool")
 
-        return fig.to_html(full_html=False, include_plotlyjs=False)
+        return fig.to_html(**PLOTLY_HTML_FRAGMENT_CONFIG)
 
 
 class PieBreakdownVisualization:
@@ -1325,7 +1355,7 @@ def get_standard_instrumentations(*, uncapped: bool = False) -> list[Instrumenta
         ),
         BlockVariantPieBreakdown(),
         ToolPieBreakdown(),
-        ToolConcurrencyVisualization(),
+        ToolUsageLineGraph(),
         GanttChart(),
         ParallelismChart(),
     ]

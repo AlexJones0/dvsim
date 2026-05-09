@@ -318,8 +318,9 @@ class ParallelismChart(TimelineBarChart):
     def render(self, results: InstrumentationResults) -> str | None:
         """Render a parallelism visualization from the instrumentation results as a HTML fragment.
 
-        If the required job timing information is not available (or there are no jobs), just
-        returns `None` instead.
+        Also computes some additional metrics and appends them as simple paragraphs at the end
+        of the fragment. If the required job timing information is not available (or there are no
+        jobs), just returns `None` instead.
 
         """
         build_output = self._build(results)

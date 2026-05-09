@@ -20,6 +20,7 @@ from dvsim.templates.render import render_template
 __all__ = (
     "DEFAULT_PNG_THRESHOLD",
     "DEFAULT_VISUALIZATION_HEIGHT_PX",
+    "PLOTLY_HTML_FRAGMENT_CONFIG",
     "PLOTLY_TIMING_AXIS_CONFIG",
     "InstrumentationVisualizer",
     "make_job_metadata_hover",
@@ -37,6 +38,12 @@ DEFAULT_PNG_THRESHOLD: int = 1000
 
 # The rendering configuration to use when rendering a graph as a PNG
 PNG_SCALE_FACTOR: float = 2.0
+
+# Standard plotly kwargs for rendering a HTML figure as a instrumentation report fragment.
+PLOTLY_HTML_FRAGMENT_CONFIG: dict[str, Any] = {
+    "full_html": False,
+    "include_plotlyjs": False,
+}
 
 # Standard plotly timing tick config options
 PLOTLY_TIMING_AXIS_CONFIG: dict[str, Any] = {
@@ -159,7 +166,7 @@ def render_large_figure(
 
     """
     if num_points is None or num_points <= interactivity_limit:
-        return fig.to_html(full_html=False, include_plotlyjs=False)
+        return fig.to_html(**PLOTLY_HTML_FRAGMENT_CONFIG)
 
     log.debug(
         "Plotly figure with %d points is larger than threshold %d.", num_points, interactivity_limit
