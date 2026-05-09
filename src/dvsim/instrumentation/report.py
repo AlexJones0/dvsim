@@ -5,21 +5,21 @@
 """DVSim scheduler instrumentation reporting & visualizations."""
 
 import base64
-import colorsys
 import heapq
-import math
 from collections import defaultdict
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Protocol
 
 import plotly.colors as pc
 import plotly.graph_objects as go
+import plotly.offline
 from plotly.graph_objs import Figure
 from plotly.subplots import make_subplots
 
 from dvsim.instrumentation import (
+    ConcreteJobTimingMetrics,
     InstrumentationResults,
     JobInstrumentationMetadata,
     JobTimingMetrics,
@@ -29,6 +29,8 @@ from dvsim.instrumentation.records import JobInstrumentationResults
 from dvsim.logging import log
 from dvsim.report.artifacts import ReportArtifacts, render_static_content
 from dvsim.templates.render import render_template
+from dvsim.utils import format_time_as_hms as format_time
+from dvsim.utils import format_time_metric, ordinal_suffix
 
 __all__ = (
     "InstrumentationVisualizer",
@@ -41,14 +43,24 @@ __all__ = (
 
 
 # The default figure height in pixels that visualizations should target, if possible
-MAX_VISUALIZATION_HEIGHT_PX: int = 1000
+DEFAULT_VISUALIZATION_HEIGHT_PX: int = 1000
 
 # The number of jobs above which graphs should be rendered as encoded PNGs, instead of dynamic HTML
-GRAPH_PNG_THRESHOLD: int = 1000
+DEFAULT_PNG_THRESHOLD: int = 1000
 
 # The rendering configuration to use when rendering a graph as a PNG
 PNG_SCALE_SQRT_DIVIDER: int = 1000
 PNG_SCALE_FACTOR: float = 2.0
+
+# Standard plotly timing tick config options
+PLOTLY_TIMING_AXIS_CONFIG: dict[str, Any] = {
+    "title": "Time (s)",
+    "tickformat": ",",
+    "ticks": "outside",
+    "tickwidth": 1,
+    "ticklen": 4,
+    "tickcolor": "black",
+}
 
 
 class InstrumentationVisualizer(Protocol):
@@ -81,7 +93,6 @@ def render_html_report(
     outdir: Path | None = None,
 ) -> ReportArtifacts:
     """TODO"""
-    # TODO: any nice way to check the plotly version matches the minified JS. Simple comparison?
     log.info("Rendering instrumentation HTML report...")
 
     if visualizations is None:
@@ -120,11 +131,17 @@ def render_html_report(
                 "css/bootstrap.min.css",
                 "js/bootstrap.bundle.min.js",
                 "js/htmx.min.js",
-            ]
-            + (["js/plotly.min.js"] if renders else []),
+            ],
             outdir=outdir,
         )
     )
+
+    # Render static plotly.js separately
+    if renders:
+        plotly_js_path = "js/plotly.min.js"
+        artifacts[plotly_js_path] = plotly.offline.get_plotlyjs()
+        if outdir is not None:
+            (outdir / plotly_js_path).write_text(artifacts[plotly_js_path])
 
     return artifacts
 
@@ -133,7 +150,7 @@ def render_large_figure(
     fig: Figure,
     *,
     num_points: int | None = None,
-    interactivity_limit: int = GRAPH_PNG_THRESHOLD,
+    interactivity_limit: int = DEFAULT_PNG_THRESHOLD,
     png_width: int | None = None,
     png_height: int | None = None,
 ) -> str:
@@ -145,9 +162,9 @@ def render_large_figure(
     )
 
     width = fig.layout.width if png_width is None else png_width
-    width = MAX_VISUALIZATION_HEIGHT_PX if width is None else width
+    width = DEFAULT_VISUALIZATION_HEIGHT_PX if width is None else width
     height = fig.layout.height if png_height is None else png_height
-    height = MAX_VISUALIZATION_HEIGHT_PX if height is None else height
+    height = DEFAULT_VISUALIZATION_HEIGHT_PX if height is None else height
 
     log.debug(
         "Rendering the figure as a PNG with dimensions (%dx%d) with scale %g...",
@@ -161,7 +178,7 @@ def render_large_figure(
     return (
         f'<img src="data:image/png;base64,{b64}" '
         f'     onclick="window.open(this.src)" '
-        f'     style="max-height:{MAX_VISUALIZATION_HEIGHT_PX}px; height: auto; '
+        f'     style="max-height:{DEFAULT_VISUALIZATION_HEIGHT_PX}px; height: auto; '
         f'            width: 100%; cursor: zoom-in;" />'
         f'<div style="font-size: 0.9em;">'
         f"  Click to open the full-resolution image"
@@ -170,26 +187,6 @@ def render_large_figure(
 
 
 # TODO: maybe move these to some common utils
-
-
-def _format_time(seconds: int, *, omit_zero: bool = False) -> str:
-    """Format some runtime like '12h 34m 56.79s'."""
-    hours, remainder = divmod(seconds, 3600)
-    minutes, secs = divmod(remainder, 60)
-    if omit_zero and hours == 0 and minutes == 0:
-        return f"{secs:.2f}s"
-    elif omit_zero and hours == 0:
-        return f"{int(minutes)}m {secs:.2f}s"
-    return f"{int(hours)}h {int(minutes)}m {secs:.2f}s"
-
-
-def _ordinal_suffix(n: int) -> str:
-    """Suffix for some ordinal (positive int), e.g. 'st' for 1st, 'th' for 11th, 'rd' for 33rd."""
-    if n in (11, 12, 13):
-        return "th"
-
-    suffixes = ("st", "nd", "rd")
-    return suffixes[n % 10 - 1] if n % 10 in (1, 2, 3) else "th"
 
 
 def make_job_metadata_hover(
@@ -237,21 +234,14 @@ def make_repeating_color_map(data: Iterable[str], colors: Iterable[str]) -> dict
     return {item: color for item, color in zip(data, colors, strict=False)}
 
 
-def get_run_time_info(
-    scheduler_timing: SchedulerTimingMetrics, job_timings: dict[str, JobTimingMetrics]
-) -> tuple[float, float]:
-    """TODO"""
-    if scheduler_timing is None or scheduler_timing.start_time is None:
-        return min(timing.start_time for timing in job_timings.values()), max(
-            timing.end_time for timing in job_timings.values()
-        )
-    else:
-        return scheduler_timing.start_time, scheduler_timing.end_time
+# Default timeline (bar chart) rendering size & positioning properties
+DEFAULT_MIN_BAR_PX: int = 4
+DEFAULT_MAX_BAR_PX: int = 50
 
 
 @dataclass(frozen=True)
-class JobBarMeta:
-    """TODO"""
+class TimelineMeta:
+    """Metadata about a run's timeline computed from instrumentation information."""
 
     num_jobs: int
     num_indices: int
@@ -259,45 +249,61 @@ class JobBarMeta:
 
 
 @dataclass(frozen=True)
-class JobBarResult:
-    """TODO"""
+class TimelineResult:
+    """A plotly Figure & some accompanying run metadata computed from instrumentation info."""
 
     fig: Figure
-    meta: JobBarMeta
+    meta: TimelineMeta
 
 
-class JobBarVisualization:
-    """TODO"""
+class TimelineBarChart:
+    """Renders plotly bar chart figures showing scheduler job timeline information."""
 
     def __init__(
         self,
+        *,
         squashed: bool,
         apply_bar_scaling: bool,
-        bar_px_range: tuple[int, int],
-        margins: dict[str, int],
+        bar_px_range: tuple[int, int] = (DEFAULT_MIN_BAR_PX, DEFAULT_MAX_BAR_PX),
     ) -> None:
-        """TODO
+        """Construct a TimelineBarChart.
 
-        apply_bar_scaling: scale bar thickness for graphs with too many bars
-        bar_px_range: (min, max)
-        margins: (t, b, l, r)
+        Args:
+            squashed: If true, squash bars down into the minimum number of indices/slots required
+              to render all bars without overlaps (as in interval partitioning).
+            apply_bar_scaling: Enable the ability to automatically increase the bar thickness. This
+              will make bars more visible on larger graphs, but will cause bars to overlap.
+            bar_px_range: tuple of (min, max) range of pixels that each bar is allowed to occupy.
+
         """
-        self.squashed = squashed
-        self.apply_bar_scaling = apply_bar_scaling
-        self.min_bar_px = bar_px_range[0]
-        self.max_bar_px = bar_px_range[1]
-        self.margins = margins
+        self.squashed: bool = squashed
+        self.apply_bar_scaling: bool = apply_bar_scaling
+        self.min_bar_px: int = bar_px_range[0]
+        self.max_bar_px: int = bar_px_range[1]
 
-    def _assign_parallel_slots(
-        self, jobs_by_start_time: list[tuple[str, JobTimingMetrics]]
+        # Margins to render the bar chart with
+        self.margins: dict[str, int] = {"t": 80, "b": 40, "l": 50, "r": 20}
+
+    def _assign_parallel_indices(
+        self, jobs_by_start_time: list[tuple[str, ConcreteJobTimingMetrics]]
     ) -> tuple[dict[str, int], int]:
-        """TODO. Interval partitioning problem, sort of."""
+        """Squash the bar chart by assigning each job to the first unoccupied parallel index.
+
+        Args:
+            jobs_by_start_time: a list of (job_id, job timing) items pre-ordered by start time.
+
+        Returns:
+            A tuple of (mapping of job_id -> assigned index, number of indices).
+
+        """
         heap: list[tuple[float, int]] = []  # heap of (end time, slot ID)
         assignments: dict[str, int] = {}  # assignments of (job ID -> slot ID)
-        next_slot_id = 0
+        next_slot_id: int = 0
 
         # Greedy assignment (same approach as interval partitioning problem)
         for job_id, timing in jobs_by_start_time:
+            if timing.start_time is None or timing.end_time is None:
+                continue
             if heap and heap[0][0] <= timing.start_time:
                 _, slot = heapq.heappop(heap)
             else:
@@ -308,70 +314,71 @@ class JobBarVisualization:
 
         return assignments, next_slot_id
 
-    def _compute_bar_thickness(self, num_indices: int) -> int:
-        """Compute the bar thickness (in visual units) to use for this chart.
+    def _compute_chart_height(self, num_indices: int) -> int:
+        """Compute the height that should be used for the bar chart figure."""
+        vertical_margins = self.margins.get("t", 0) + self.margins.get("b", 0)
+        height = num_indices * self.max_bar_px + vertical_margins
+        return min(height, DEFAULT_VISUALIZATION_HEIGHT_PX)
 
-        Below a configured threshold (GRAPH_PNG_THRESHOLD) we always render at a minimum width.
+    def _compute_bar_thickness(self, num_indices: int) -> float:
+        """Compute the bar thickness (in visual units, not px) to use for this chart.
+
+        Below a configured threshold (DEFAULT_PNG_THRESHOLD) we always render at a minimum width.
         After this 'knee', we linearly scale the width to ensure visibility for large amounts.
 
         """
-        if not self.apply_bar_scaling or num_indices <= GRAPH_PNG_THRESHOLD:
+        if not self.apply_bar_scaling or num_indices <= DEFAULT_PNG_THRESHOLD:
             return 1.0
-        scaled = num_indices / MAX_VISUALIZATION_HEIGHT_PX * self.min_bar_px
+        scaled = num_indices / DEFAULT_PNG_THRESHOLD * self.min_bar_px
         return max(1.0, scaled)
 
     def _get_marker_info(self, num_indices: int, bar_color: str) -> dict[str, Any]:
         """Get the bar marker information to use for this chart.
 
-        Below a configured threshold (GRAPH_PNG_THRESHOLD), we render as normal. When the number of
-        jobs/indices exceeds this threshold, we make bar outlines less distinctive to avoid small
-        bars combining to blot out parts of the graph.
-
-        TODO update this comment to match the new implementation
+        If squashed, we always render without outlines. Otherwise, below a configured threshold
+        (DEFAULT_PNG_THRESHOLD), we render as normal. When the number of jobs exceeds this
+        threshold, we make bar outlines less distinctive to avoid small bars overlapping and
+        combining to blot out parts of the graph.
 
         """
         if self.squashed:
-            return dict(color=bar_color, line=dict(width=0))
-        if num_indices <= GRAPH_PNG_THRESHOLD:
-            return dict(color=bar_color)
-        return dict(color=bar_color, line=dict(width=0.2, color="rgba(0,0,0,0.025)"))
+            return {"color": bar_color, "line": {"width": 0}}
+        if num_indices <= DEFAULT_PNG_THRESHOLD:
+            return {"color": bar_color}
+        return {"color": bar_color, "line": {"width": 0.2, "color": "rgba(0,0,0,0.025)"}}
 
-    def build(self, results: InstrumentationResults) -> JobBarResult | None:
-        """TODO"""
-        # Get job & scheduler runtime info, and check enough times exist to render a graph (>= 1)
-        job_timings = {
-            job_id: job.timing for job_id, job in results.jobs.items() if job.timing is not None
-        }
+    def _build(self, results: InstrumentationResults) -> TimelineResult | None:
+        """Build the plotly bar chart figure (& compute the metadata) for the given results."""
+        # Get the job & scheduler timing info, and check enough data exists to build a graph.
+        job_timings = results.job_timings()
         if not job_timings:
             return None
-
         jobs_by_start_time = sorted(job_timings.items(), key=lambda kv: kv[1].start_time)
-        run_start_time, run_end_time = get_run_time_info(results.scheduler.timing, job_timings)
+        run_start_time, run_end_time = results.get_run_time_info()
 
-        # Determine the index/slot of each bar by start time
+        # Determine the index (slot) of each bar by start time
         if self.squashed:
-            job_indices, num_indices = self._assign_parallel_slots(jobs_by_start_time)
+            job_indices, num_indices = self._assign_parallel_indices(jobs_by_start_time)
         else:
             job_indices = {job_id: i for i, (job_id, _) in enumerate(jobs_by_start_time)}
             num_indices = len(jobs_by_start_time)
 
         # If any relevant job metadata exists, split bars into subsets keyed by the target.
-        subsets: dict[str, list[str]] = defaultdict(lambda: [])
+        categories: dict[str, list[str]] = defaultdict(list)
         for job_id in job_indices:
             metadata = results.jobs[job_id].meta
             key = "all" if metadata is None else metadata.target
-            subsets[key].append(job_id)
-        color_map = make_repeating_color_map(sorted(subsets), pc.qualitative.Plotly)
+            categories[key].append(job_id)
+        categories = dict(sorted(categories.items()))
+        color_map = make_repeating_color_map(categories, pc.qualitative.Plotly)
 
         # Determine scaling factors so the bars remain visible for large numbers of jobs.
-        tb_margins = self.margins.get("t", 0) + self.margins.get("b", 0)
-        height = num_indices * self.max_bar_px + tb_margins
-        clamped_height = min(MAX_VISUALIZATION_HEIGHT_PX, height)
+        clamped_height = self._compute_chart_height(num_indices)
         bar_width = self._compute_bar_thickness(num_indices)
 
         # Render the chart itself
         fig = go.Figure()
-        for key, jobs in subsets.items():
+        for key, jobs in categories.items():
             bar_color = color_map[key]
             marker_info = self._get_marker_info(num_indices, bar_color)
 
@@ -384,12 +391,12 @@ class JobBarVisualization:
                 start_time_offset = timings.start_time - run_start_time
                 end_time_offset = timings.end_time - run_start_time
                 extra_timing_info = {
-                    "duration": f"{_format_time(timings.duration)} ({timings.duration:.2f}s)",
-                    "start time": f"{_format_time(start_time_offset)} ({timings.start_time:.2f})",
-                    "end time": f"{_format_time(end_time_offset)} ({timings.end_time:.2f})",
+                    "duration": format_time_metric(timings.duration),
+                    "start_time": format_time_metric(start_time_offset),
+                    "end time": format_time_metric(end_time_offset),
                 }
                 if self.squashed:
-                    extra_timing_info["parallel slot"] = index
+                    extra_timing_info["parallel slot"] = str(index)
                 hover_data = make_job_metadata_hover(job_id, extra_timing_info, metadata)
 
                 durations.append(timings.duration)
@@ -401,9 +408,9 @@ class JobBarVisualization:
                 x=durations,
                 y=indices,
                 base=start_times,
+                name=key,
                 orientation="h",
                 width=bar_width,
-                name=key,
                 marker=marker_info,
                 customdata=hovers,
                 hovertemplate="%{customdata}<extra></extra>",
@@ -413,66 +420,42 @@ class JobBarVisualization:
         fig.update_layout(
             template="plotly_white",
             margin=self.margins,
-            title_x=0.5,
             height=clamped_height,
         )
         fig.update_legends(title="Job Target")
-        fig.update_yaxes(autorange="reversed", title="Job")
-        fig.update_xaxes(
-            title="Time (s)",
-            tickformat=",",
-            ticks="outside",
-            tickwidth=1,
-            tickcolor="black",
-            ticklen=4,
-            showgrid=True,
-        )
+        fig.update_yaxes(title="Job", autorange="reversed")
+        fig.update_xaxes(showgrid=True, **PLOTLY_TIMING_AXIS_CONFIG)
 
-        # For squashed/parallel charts, use overlay mode so different targets/subsets
+        # For squashed charts, use 'overlay' mode so different targets/subsets
         # in the same index are rendered with the same vertical offset
         if self.squashed:
             fig.update_layout(barmode="overlay")
 
-        # Prevent interpolating non-integer ticks for small `num_indices`
+        # Enforce linear integer tick scaling for small numbers of indices to prevent automatic
+        # interpolation of non-integer ticks.
         linear_tick_threshold = 10
         if num_indices <= linear_tick_threshold:
             fig.update_yaxes(tickmode="linear", tick0=1, dtick=1)
         else:
             fig.update_yaxes(tickmode="auto", tickformat=",")
 
-        return JobBarResult(
+        return TimelineResult(
             fig=fig,
-            meta=JobBarMeta(
+            meta=TimelineMeta(
                 num_jobs=len(jobs_by_start_time),
                 num_indices=num_indices,
                 run_duration=(run_end_time - run_start_time),
             ),
         )
 
-
-class TimingGanttVisualization:
-    """TODO"""
-
-    title = "Job Timeline"
-
-    # TODO (also, should this inherit somehow to pick up these defaults? Or should they live elsewhere?)
-    MIN_BAR_PX: int = 4
-    MAX_BAR_PX: int = 50
-    MARGINS: dict[str, int] = dict(t=80, b=40, l=50, r=20)
-
-    def __init__(self) -> None:
-        """TODO"""
-        # TODO: remove the builder pattern, just inherit from it...
-        self.builder = JobBarVisualization(
-            squashed=False,
-            apply_bar_scaling=True,
-            bar_px_range=(self.MIN_BAR_PX, self.MAX_BAR_PX),
-            margins=self.MARGINS,
-        )
-
     def render(self, results: InstrumentationResults) -> str | None:
-        """TODO"""
-        build_output = self.builder.build(results)
+        """Render a bar chart visualization from the instrumentation results as a HTML fragment.
+
+        If the required job timing information is not available (or there are no jobs), just
+        returns `None` instead.
+
+        """
+        build_output = self._build(results)
         if build_output is None:
             return None
 
@@ -480,40 +463,75 @@ class TimingGanttVisualization:
         fig.update_layout(
             title_text=(
                 f"<b>Gantt chart of {build_output.meta.num_jobs:,} scheduled jobs "
-                f"({_format_time(build_output.meta.run_duration, omit_zero=True)} run length)</b>"
+                f"({format_time(build_output.meta.run_duration, omit_zero=True)} run length)</b>"
             ),
+            title_x=0.5,
         )
 
         return render_large_figure(
             fig,
             num_points=build_output.meta.num_jobs,
-            png_width=MAX_VISUALIZATION_HEIGHT_PX * 2,
-            png_height=MAX_VISUALIZATION_HEIGHT_PX,
+            # If rendering as PNG, use a 2:1 aspect ratio.
+            png_width=DEFAULT_VISUALIZATION_HEIGHT_PX * 2,
+            png_height=DEFAULT_VISUALIZATION_HEIGHT_PX,
         )
 
 
-class ParallelismVisualization:
-    """TODO"""
+class GanttChart(TimelineBarChart):
+    """Gantt chart showing the progression of jobs that are scheduled over the run's lifetime."""
+
+    title = "Job Timeline"
+
+    def __init__(self) -> None:
+        """Construct a GanttChart."""
+        super().__init__(squashed=False, apply_bar_scaling=True)
+
+    def render(self, results: InstrumentationResults) -> str | None:
+        """Render a Gantt chart visualization from the instrumentation results as a HTML fragment.
+
+        If the required job timing information is not available (or there are no jobs), just
+        returns `None` instead.
+
+        """
+        build_output = self._build(results)
+        if build_output is None:
+            return None
+
+        fig = build_output.fig
+        fig.update_layout(
+            title_text=(
+                f"<b>Gantt chart of {build_output.meta.num_jobs:,} scheduled jobs "
+                f"({format_time(build_output.meta.run_duration, omit_zero=True)} run length)</b>"
+            ),
+            title_x=0.5,
+        )
+
+        return render_large_figure(
+            fig,
+            num_points=build_output.meta.num_jobs,
+            # If rendering as PNG, use a 2:1 aspect ratio.
+            png_width=DEFAULT_VISUALIZATION_HEIGHT_PX * 2,
+            png_height=DEFAULT_VISUALIZATION_HEIGHT_PX,
+        )
+
+
+class ParallelismChart(TimelineBarChart):
+    """A squashed timeline that shows the (simulated) parallelism in scheduling a run's jobs."""
 
     title = "Job Parallelism"
 
-    # TODO (also, should this inherit somehow to pick up these defaults? Or should they live elsewhere?)
-    MIN_BAR_PX: int = 4
-    MAX_BAR_PX: int = 50
-    MARGINS: dict[str, int] = dict(t=80, b=40, l=50, r=20)
-
     def __init__(self) -> None:
-        """TODO"""
-        self.builder = JobBarVisualization(
-            squashed=True,
-            apply_bar_scaling=True,
-            bar_px_range=(self.MIN_BAR_PX, self.MAX_BAR_PX),
-            margins=self.MARGINS,
-        )
+        """Construct a ParallelismChart."""
+        super().__init__(squashed=True, apply_bar_scaling=True)
 
     def render(self, results: InstrumentationResults) -> str | None:
-        """TODO"""
-        build_output = self.builder.build(results)
+        """Render a parallelism visualization from the instrumentation results as a HTML fragment.
+
+        If the required job timing information is not available (or there are no jobs), just
+        returns `None` instead.
+
+        """
+        build_output = self._build(results)
         if build_output is None:
             return None
 
@@ -521,7 +539,7 @@ class ParallelismVisualization:
         fig.update_layout(
             title_text=(
                 f"<b>Job Parallelism Visualization "
-                f"({_format_time(build_output.meta.run_duration, omit_zero=True)} run length)</b>"
+                f"({format_time(build_output.meta.run_duration, omit_zero=True)} run length)</b>"
             ),
         )
         fig.update_yaxes(title="Parallel slot")
@@ -529,11 +547,12 @@ class ParallelismVisualization:
         rendered_fig = render_large_figure(
             fig,
             num_points=build_output.meta.num_jobs,
-            png_width=MAX_VISUALIZATION_HEIGHT_PX * 2,
-            png_height=MAX_VISUALIZATION_HEIGHT_PX,
+            # If rendering as PNG, use a 2:1 aspect ratio.
+            png_width=DEFAULT_VISUALIZATION_HEIGHT_PX * 2,
+            png_height=DEFAULT_VISUALIZATION_HEIGHT_PX,
         )
 
-        # Add some additional metrics describing the scheduling efficiency
+        # Add some additional metrics (as text) describing the scheduling efficiency
         available_compute_time = build_output.meta.num_indices * build_output.meta.run_duration
         if available_compute_time == 0:
             return rendered_fig
@@ -543,17 +562,16 @@ class ParallelismVisualization:
             if job.timing is not None and job.timing.duration is not None
         )
         utilization = useful_work_time / available_compute_time
+        metrics = {
+            "Degree of parallelism": str(build_output.meta.num_indices),
+            "Wallclock time": format_time_metric(build_output.meta.run_duration, omit_zero=True),
+            "Available compute time": format_time_metric(available_compute_time, omit_zero=True),
+            "Time running jobs": format_time_metric(useful_work_time, omit_zero=True),
+            "Parallel utilization": f"{utilization:.3%}",
+        }
         rendered_fig += (
-            f"<p><b>Degree of parallelism</b>: {build_output.meta.num_indices}<br>"
-            f"<b>Wallclock runtime</b>: {_format_time(build_output.meta.run_duration, omit_zero=True)}"
-            f" ({build_output.meta.run_duration:,.2f}s)<br>"
-            f"<b>Available compute time</b>: {_format_time(available_compute_time, omit_zero=True)}"
-            f" ({available_compute_time:,.2f}s)<br>"
-            f"<b>Time running jobs</b>: {_format_time(useful_work_time, omit_zero=True)}"
-            f" ({useful_work_time:,.2f}s)<br>"
-            f"<b>Parallel utilization</b>: {utilization * 100:.3f}%</p>"
+            "<p>" + "<br>".join(f"<b>{key}</b>: {value}" for key, value in metrics.items()) + "</p>"
         )
-
         return rendered_fig
 
 
@@ -592,9 +610,7 @@ class LongestJobsVisualization:
 
     def render(self, results: InstrumentationResults) -> str | None:
         """TODO"""
-        job_timings = {
-            job_id: job.timing for job_id, job in results.jobs.items() if job.timing is not None
-        }
+        job_timings = results.job_timings()
         if not job_timings:
             return None
         if not self.allow_missing_meta and all(job.meta is None for job in results.jobs.values()):
@@ -606,7 +622,7 @@ class LongestJobsVisualization:
         )
 
         # Group items
-        jobs_per_group: dict[str, list[str]] = defaultdict(lambda: [])
+        jobs_per_group: dict[str, list[str]] = defaultdict(list)
         group_durations: dict[str, float] = defaultdict(float)
         for job_id, timing in jobs_by_longest_duration:
             if self.test_group_fn is not None:
@@ -639,7 +655,7 @@ class LongestJobsVisualization:
         }
 
         # TODO comment this better
-        top_by_category: dict[str, list[str]] = defaultdict(lambda: [])
+        top_by_category: dict[str, list[str]] = defaultdict(list)
         top_by_category["All categories"] = [
             group for (group, _) in groups_by_longest_duration[:num_visible_items]
         ]
@@ -711,10 +727,10 @@ class LongestJobsVisualization:
                     extra_timing_info = [
                         f"{num_combined_jobs} other jobs (combined)",
                         f"Number of seeds: {len(jobs)}",
-                        f"Combined Duration: {_format_time(total_duration)} ({total_duration:.2f}s)",
-                        f"Mean Duration: {_format_time(avg_duration)} ({avg_duration:.2f}s)",
-                        f"Maximum Duration: {_format_time(max_duration)} ({max_duration:.2f}s)",
-                        f"Minimum Duration: {_format_time(min_duration)} ({min_duration:.2f}s)",
+                        f"Combined Duration: {format_time(total_duration)} ({total_duration:.2f}s)",
+                        f"Mean Duration: {format_time(avg_duration)} ({avg_duration:.2f}s)",
+                        f"Maximum Duration: {format_time(max_duration)} ({max_duration:.2f}s)",
+                        f"Minimum Duration: {format_time(min_duration)} ({min_duration:.2f}s)",
                     ]
                     first_job = results.jobs[combined_jobs[0]]
                     hover = make_job_metadata_hover(group, extra_timing_info, first_job.meta)
@@ -736,11 +752,11 @@ class LongestJobsVisualization:
                     if self.test_group_fn is not None:
                         extra_timing_info += [
                             f"Number of seeds: {len(jobs)}",
-                            f"Test Duration (all seeds combined): {_format_time(group_duration)} ({group_duration:.2f}s)",
-                            f"Test Ranking (all seeds combined): {group_ordinal}{_ordinal_suffix(group_ordinal)} longest",
+                            f"Test Duration (all seeds combined): {format_time(group_duration)} ({group_duration:.2f}s)",
+                            f"Test Ranking (all seeds combined): {group_ordinal}{ordinal_suffix(group_ordinal)} longest",
                         ]
                     extra_timing_info += [
-                        f"Duration: {_format_time(timings.duration)} ({timings.duration:.2f}s)",
+                        f"Duration: {format_time(timings.duration)} ({timings.duration:.2f}s)",
                     ]
                     hover = make_job_metadata_hover(
                         job_id, extra_timing_info, results.jobs[job_id].meta
@@ -792,7 +808,7 @@ class LongestJobsVisualization:
             title_y=0.97,
             title_x=0.5,
             title_xanchor="center",
-            height=MAX_VISUALIZATION_HEIGHT_PX,  # TODO: modularize the bar chart scaling code and re-use it here
+            height=DEFAULT_VISUALIZATION_HEIGHT_PX,  # TODO: modularize the bar chart scaling code and re-use it here
             margin=self.MARGINS,
             bargap=0.05,
             showlegend=False,
@@ -855,7 +871,7 @@ class LongestTestsVisualization(LongestJobsVisualization):
     def get_job_test(self, job: JobInstrumentationResults) -> str | None:
         """TODO"""
         if job.meta is None:
-            return
+            return None
         variant_name = job.meta.block
         if job.meta.block_variant:
             variant_name += f"_{job.meta.block_variant}"
@@ -978,16 +994,14 @@ class ConcurrencyVisualization:
 
     def _build(self, results: InstrumentationResults) -> Figure | None:
         """TODO"""
-        job_timings = {
-            job_id: job.timing for job_id, job in results.jobs.items() if job.timing is not None
-        }
+        job_timings = results.job_timings()
         if not job_timings:
             return None
 
-        run_start_time, run_end_time = get_run_time_info(results.scheduler.timing, job_timings)
+        run_start_time, run_end_time = results.get_run_time_info()
 
         # Group items into subsets
-        subsets: dict[str, list[str]] = defaultdict(lambda: [])
+        subsets: dict[str, list[str]] = defaultdict(list)
         for job_id in job_timings:
             if self.group_fn is not None:
                 # TODO: handle None better
@@ -1019,7 +1033,7 @@ class ConcurrencyVisualization:
             title_text="<b>Job Concurrency over Time</b>",
             title_x=0.5,
             margin=dict(t=40),
-            height=min(800, MAX_VISUALIZATION_HEIGHT_PX),
+            height=min(800, DEFAULT_VISUALIZATION_HEIGHT_PX),
             hovermode="x unified",
         )
         fig.update_yaxes(title="Number of Concurrent Jobs", tickformat=",", showgrid=True)
@@ -1031,6 +1045,7 @@ class ConcurrencyVisualization:
             tickcolor="black",
             ticklen=4,
             showgrid=True,
+            range=[0, run_end_time - run_start_time],
         )
 
         return fig
@@ -1069,6 +1084,9 @@ class ToolConcurrencyVisualization(ConcurrencyVisualization):
         if fig is None:
             return None
 
+        fig.update_layout(
+            title_text="<b>Tool Concurrency over Time</b>",
+        )
         fig.update_legends(title="Tool")
 
         return fig.to_html(full_html=False, include_plotlyjs=False)
@@ -1096,14 +1114,12 @@ class PieBreakdownVisualization:
         # (maybe even giving the stricter typing guarantees, something like with_data_present
         # - but maybe this is annoying in that I need to make a new model for it? I guess it'self
         # ironically easier not to pass around the models everywhere).
-        job_timings = {
-            job_id: job.timing for job_id, job in results.jobs.items() if job.timing is not None
-        }
+        job_timings = results.job_timings()
         if not job_timings:
             return None
 
         # Group items into subsets
-        subsets: dict[str, list[str]] = defaultdict(lambda: [])
+        subsets: dict[str, list[str]] = defaultdict(list)
         subset_durations: dict[str, float] = defaultdict(float)
         for job_id in job_timings:
             key = self.group_fn(results.jobs[job_id])
@@ -1120,11 +1136,11 @@ class PieBreakdownVisualization:
         color_map = make_repeating_color_map(sorted(subsets), pc.qualitative.Plotly)
 
         # Chart dimensions
-        pie_chart_height = min(600, MAX_VISUALIZATION_HEIGHT_PX)
+        pie_chart_height = min(600, DEFAULT_VISUALIZATION_HEIGHT_PX)
         tb_margins = self.MARGINS.get("t", 0) + self.MARGINS.get("b", 0)
         height = len(subsets) * self.MAX_BAR_PX + tb_margins
         bar_chart_height = min(
-            MAX_VISUALIZATION_HEIGHT_PX * 2 - pie_chart_height, height
+            DEFAULT_VISUALIZATION_HEIGHT_PX * 2 - pie_chart_height, height
         )  # TODO: name of this
         total_height = pie_chart_height + bar_chart_height
         row_heights = [pie_chart_height / total_height, bar_chart_height / total_height]
@@ -1148,7 +1164,7 @@ class PieBreakdownVisualization:
             (
                 f"{self.group_type.capitalize()}: {key}<br>"
                 f"Number of Jobs: {len(subsets[key])}<br>"
-                f"Total Duration: {_format_time(duration, omit_zero=True)} ({duration:.2f}s)<br>"
+                f"Total Duration: {format_time(duration, omit_zero=True)} ({duration:.2f}s)<br>"
                 f"Percentage: {pct:.2%}"
             )
             for key, duration, pct in zip(keys, durations, percentages, strict=True)
@@ -1172,7 +1188,7 @@ class PieBreakdownVisualization:
             col=1,
         )
 
-        texts = [_format_time(duration, omit_zero=True) for duration in durations]
+        texts = [format_time(duration, omit_zero=True) for duration in durations]
         for key, duration, text, color, hover in zip(
             keys, durations, texts, colors, hovers, strict=True
         ):
@@ -1310,8 +1326,8 @@ def get_standard_instrumentations(*, uncapped: bool = False) -> list[Instrumenta
         BlockVariantPieBreakdown(),
         ToolPieBreakdown(),
         ToolConcurrencyVisualization(),
-        TimingGanttVisualization(),
-        ParallelismVisualization(),
+        GanttChart(),
+        ParallelismChart(),
     ]
 
 
@@ -1333,7 +1349,6 @@ def _make_fake_results_for_testing(
     from dvsim.instrumentation import (
         JobInstrumentationMetadata,
         JobTimingMetrics,
-        SchedulerTimingMetrics,
     )
     from dvsim.instrumentation.records import (
         JobInstrumentationResults,

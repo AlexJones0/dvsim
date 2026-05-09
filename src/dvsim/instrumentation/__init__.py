@@ -9,6 +9,7 @@ from dvsim.instrumentation.compute import ComputeInstrumentation
 from dvsim.instrumentation.factory import InstrumentationFactory
 from dvsim.instrumentation.metadata import MetadataInstrumentation
 from dvsim.instrumentation.records import (
+    ConcreteJobTimingMetrics,
     InstrumentationMetrics,
     InstrumentationResults,
     JobComputeMetrics,
@@ -24,6 +25,7 @@ from dvsim.instrumentation.timing import TimingInstrumentation
 
 __all__ = (
     "ComputeInstrumentation",
+    "ConcreteJobTimingMetrics",
     "InstrumentationAggregator",
     "InstrumentationFactory",
     "InstrumentationMetrics",

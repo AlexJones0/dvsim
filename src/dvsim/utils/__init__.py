@@ -7,8 +7,15 @@
 from dvsim.utils.check import check_bool, check_int
 from dvsim.utils.fs import clean_odirs, mk_path, mk_symlink, rm_path
 from dvsim.utils.hjson import parse_hjson
+from dvsim.utils.print import ordinal_suffix, print_msg_list
 from dvsim.utils.subprocess import run_cmd, run_cmd_with_timeout
-from dvsim.utils.time import TS_FORMAT, TS_FORMAT_LONG, TS_HMS_FORMAT
+from dvsim.utils.time import (
+    TS_FORMAT,
+    TS_FORMAT_LONG,
+    TS_HMS_FORMAT,
+    format_time_as_hms,
+    format_time_metric,
+)
 from dvsim.utils.wildcards import (
     find_and_substitute_wildcards,
     subst_wildcards,
@@ -22,9 +29,13 @@ __all__ = (
     "check_int",
     "clean_odirs",
     "find_and_substitute_wildcards",
+    "format_time_as_hms",
+    "format_time_metric",
     "mk_path",
     "mk_symlink",
+    "ordinal_suffix",
     "parse_hjson",
+    "print_msg_list",
     "rm_path",
     "run_cmd",
     "run_cmd_with_timeout",

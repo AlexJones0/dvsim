@@ -8,19 +8,13 @@
 {% block head_content %}
 {% if renders %}
 <script src="js/plotly.min.js"></script>
-<style>
-    /* Compatability for older Chromium & Safari browsers */
-    .container::-webkit-scrollbar { 
-        display: none;
-    }
-</style>
 {% endif %}
 {% endblock %}
 {% block content %}
 <div class="container-md">
     <div class="row py-3">
         <div class="col">
-            <h2>Instrumentation report:</h2>
+            <h2>Instrumentation report</h2>
         </div>
     </div>
 
@@ -30,7 +24,7 @@
             <p padding="2 rem">No instrumentation visualizations matched the available report data.</p>
             {% else %}
             <ul class="nav nav-underline" style="flex-wrap: nowrap; white-space: nowrap; overflow-x: auto;
-                                                 overflow-y: hidden; scrollbar-width: none;">
+                                                 overflow-y: hidden;">
                 {% for vis, _ in renders %}
                 {% set class = "nav-link" + (" active" if loop.index0 == 0 else "") %}
                 {% set slug = vis.title.lower() | replace("_", "-") | replace (" ", "-") %}
