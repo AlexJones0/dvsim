@@ -1122,79 +1122,101 @@ class ToolUsageLineGraph(ConcurrencyLineGraph):
         return fig.to_html(**PLOTLY_HTML_FRAGMENT_CONFIG)
 
 
-class PieBreakdownVisualization:
-    """TODO"""
+class BreakdownVisualization:
+    """Renders pie & bar-chart figures showing job duration breakdown via some grouping."""
 
     title = "Job Breakdown"
 
+    # Standard layout & formatting configurations
+    MIN_PIE_HEIGHT_PX: int = 600
     MAX_BAR_PX: int = 50
-    MARGINS: dict[str, int] = dict(t=80, b=40, l=50, r=20)
+    PIE_LABEL_THRESHOLD: float = 0.01  # (percentage in [0,1], i.e. 1%)
+    PIE_HOLE_FRACTION: float = 0.6
+    PIE_SEGMENT_PULL: float = 0.03
+    SUBPLOT_SPACING: float = 0.07
 
     def __init__(
         self, *, group_type: str, group_fn: Callable[[JobInstrumentationResults], str]
     ) -> None:
-        """TODO"""
+        """Construct a BreakdownVisualization.
+
+        Args:
+            group_type: The name of the groupings (categorial type) being split on.
+            group_fn: A function for splitting jobs into unique groups (returns a string category).
+
+        """
         self.group_type = group_type
         self.group_fn = group_fn
 
+        # Default margin layout information
+        self.margins = {"t": 80, "b": 40, "l": 50, "r": 20}
+
+    def _get_color_map(self, categories: dict[str, list[str]]) -> dict[str, Any]:
+        """Build a colour map for the chart, using large palettes for more variety as is needed."""
+        palette = pc.qualitative.Plotly
+        if len(categories) > len(palette):
+            extra_colors = [
+                pc.qualitative.Bold,
+                pc.qualitative.Safe,
+                pc.qualitative.Vivid,
+                pc.qualitative.D3,
+                pc.qualitative.Set1,
+                pc.qualitative.Set2,
+            ]
+            extra_index = 0
+            while len(categories) > len(palette) and extra_index < len(extra_colors):
+                palette += extra_colors[extra_index]
+                extra_index += 1
+        return make_repeating_color_map(categories, palette)
+
     def _build(self, results: InstrumentationResults) -> Figure | None:
-        """TODO"""
-        # TODO: need to add proper handling for missing timing data everywhere...
-        # Should probably also make a nice function to handle this on the instrumentation report
-        # (maybe even giving the stricter typing guarantees, something like with_data_present
-        # - but maybe this is annoying in that I need to make a new model for it? I guess it'self
-        # ironically easier not to pass around the models everywhere).
+        """Build the plotly breakdown (pie & bar chart) for the given results."""
         job_timings = results.job_timings()
         if not job_timings:
             return None
 
-        # Group items into subsets
-        subsets: dict[str, list[str]] = defaultdict(list)
-        subset_durations: dict[str, float] = defaultdict(float)
+        # Group jobs into subsets keyed by the configured `group_fn`.
+        categories: dict[str, list[str]] = defaultdict(list)
+        group_durations: dict[str, float] = defaultdict(float)
         for job_id in job_timings:
             key = self.group_fn(results.jobs[job_id])
-            subsets[key].append(job_id)
-            subset_durations[key] += job_timings[job_id].duration
-        total_duration = sum(subset_durations.values())
+            categories[key].append(job_id)
+            group_durations[key] += job_timings[job_id].duration
+        total_duration = sum(group_durations.values())
 
-        # Assign colors to categories; use larger palettes for variety if needed
-        palette = pc.qualitative.Plotly
-        if len(subsets) > len(palette):
-            palette = pc.qualitative.Bold + pc.qualitative.Safe + pc.qualitative.Vivid
-        if len(subsets) > len(palette):
-            palette += pc.qualitative.D3 + pc.qualitative.Set1 + pc.qualitative.Set2
-        color_map = make_repeating_color_map(sorted(subsets), pc.qualitative.Plotly)
+        categories = dict(sorted(categories.items()))
+        color_map = self._get_color_map(categories)
 
-        # Chart dimensions
-        pie_chart_height = min(600, DEFAULT_VISUALIZATION_HEIGHT_PX)
-        tb_margins = self.MARGINS.get("t", 0) + self.MARGINS.get("b", 0)
-        height = len(subsets) * self.MAX_BAR_PX + tb_margins
-        bar_chart_height = min(
-            DEFAULT_VISUALIZATION_HEIGHT_PX * 2 - pie_chart_height, height
-        )  # TODO: name of this
+        # Determine the chart dimensions for the different subplots
+        pie_chart_height = min(self.MIN_PIE_HEIGHT_PX, DEFAULT_VISUALIZATION_HEIGHT_PX)
+        vertical_margins = self.margins.get("t", 0) + self.margins.get("b", 0)
+        bars_height = len(categories) * self.MAX_BAR_PX + vertical_margins
+        bar_chart_height = min(DEFAULT_VISUALIZATION_HEIGHT_PX * 2 - pie_chart_height, bars_height)
         total_height = pie_chart_height + bar_chart_height
         row_heights = [pie_chart_height / total_height, bar_chart_height / total_height]
 
-        # Draw 2 subplots of the same data - a pie chart on the left & a bar chart on the right
+        # Draw 2 subplots of the same data - a pie chart on top & a bar chart on bottom.
         fig = make_subplots(
-            rows=2, cols=1, row_heights=row_heights, specs=[[{"type": "pie"}], [{"type": "bar"}]]
+            rows=2,
+            cols=1,
+            row_heights=row_heights,
+            vertical_spacing=self.SUBPLOT_SPACING,
+            specs=[[{"type": "pie"}], [{"type": "bar"}]],
         )
 
-        subsets_by_duration = sorted(subset_durations.items(), key=lambda kv: kv[1], reverse=True)
-        keys = [kv[0] for kv in subsets_by_duration]
-        durations = [kv[1] for kv in subsets_by_duration]
+        sorted_durations = sorted(group_durations.items(), key=lambda kv: kv[1], reverse=True)
+        keys, durations = zip(*sorted_durations, strict=True)
         percentages = [duration / total_duration for duration in durations]
         colors = [color_map[key] for key in keys]
-        pulls = [0.03 for _ in keys]
         display_text = [
-            f"{key}<br>{pct:.2%}" if pct > 0.01 else ""
+            f"{key}<br>{pct:.2%}" if pct > self.PIE_LABEL_THRESHOLD else ""
             for key, pct in zip(keys, percentages, strict=True)
         ]
         hovers = [
             (
                 f"{self.group_type.capitalize()}: {key}<br>"
-                f"Number of Jobs: {len(subsets[key])}<br>"
-                f"Total Duration: {format_time(duration, omit_zero=True)} ({duration:.2f}s)<br>"
+                f"Number of Jobs: {len(categories[key])}<br>"
+                f"Total Duration: {format_time_metric(duration, omit_zero=True)}<br>"
                 f"Percentage: {pct:.2%}"
             )
             for key, duration, pct in zip(keys, durations, percentages, strict=True)
@@ -1205,19 +1227,20 @@ class PieBreakdownVisualization:
                 labels=keys,
                 values=durations,
                 text=display_text,
-                hole=0.6,
                 textinfo="text",
                 textposition="outside",
-                pull=pulls,
-                marker=dict(colors=colors),
+                showlegend=False,
+                hole=self.PIE_HOLE_FRACTION,
+                pull=self.PIE_SEGMENT_PULL,
+                marker={"colors": colors},
                 customdata=hovers,
                 hovertemplate="%{customdata}<extra></extra>",
-                showlegend=False,
             ),
             row=1,
             col=1,
         )
 
+        # Traces must be added individually to allow filtering via the legend.
         texts = [format_time(duration, omit_zero=True) for duration in durations]
         for key, duration, text, color, hover in zip(
             keys, durations, texts, colors, hovers, strict=True
@@ -1227,15 +1250,15 @@ class PieBreakdownVisualization:
                     y=[key],
                     x=[duration],
                     name=key,
-                    orientation="h",
                     text=[text],
-                    textposition="outside",  # TODO
-                    cliponaxis=False,
+                    orientation="h",
+                    textposition="outside",
                     textangle=0,
-                    marker=dict(color=color),
+                    cliponaxis=False,
+                    showlegend=True,
+                    marker={"color": color},
                     customdata=[hover],
                     hovertemplate="%{customdata}<extra></extra>",
-                    showlegend=True,
                 ),
                 row=2,
                 col=1,
@@ -1246,7 +1269,7 @@ class PieBreakdownVisualization:
             template="plotly_white",
             title_text=f"<b>Total job runtime per {self.group_type.lower()}</b>",
             title_x=0.5,
-            margin=self.MARGINS,
+            margin=self.margins,
             height=total_height,
             bargap=0.1,
         )
@@ -1258,80 +1281,80 @@ class PieBreakdownVisualization:
             yanchor="middle",
         )
         fig.update_yaxes(autorange="reversed")
-        fig.update_xaxes(
-            title="Time (s)",
-            ticks="outside",
-            tickwidth=1,
-            tickcolor="black",
-            ticklen=4,
-            showgrid=True,
-        )
+        fig.update_xaxes(showgrid=True, **PLOTLY_TIMING_AXIS_CONFIG)
 
         return fig
 
     def render(self, results: InstrumentationResults) -> str | None:
-        """TODO"""
+        """Render a breakdown (pie/bar chart) from the instrumentation results as a HTML fragment.
+
+        If the required job timing information is not available (or there are no jobs), just
+        returns `None` instead.
+
+        """
         fig = self._build(results)
         if fig is None:
             return None
 
-        return fig.to_html(full_html=False, include_plotlyjs=False)
+        return fig.to_html(**PLOTLY_HTML_FRAGMENT_CONFIG)
 
 
-class ToolPieBreakdown(PieBreakdownVisualization):
-    """TODO"""
+class ToolBreakdown(BreakdownVisualization):
+    """Breakdown pie/bar chart showing aggregated job duration per tool used."""
 
     title = "Runtime per Tool"
 
     def __init__(self) -> None:
-        """TODO"""
+        """Construct a ToolBreakdown."""
         super().__init__(group_type="tool", group_fn=self._get_job_tool)
 
     def _get_job_tool(self, job: JobInstrumentationResults) -> str:
-        """TODO"""
+        """Get the tool from a job's recorded metadata, or 'Unknown' if it does not exist."""
         if job.meta is None:
             return "Unknown"
 
         return job.meta.tool
 
     def render(self, results: InstrumentationResults) -> str | None:
-        """TODO"""
+        """Render a per-tool breakdown graph from the instrumentation results as a HTML fragment.
+
+        If the required job timing or metadata information is not available (or there are no
+        jobs), just returns `None` instead.
+
+        """
         if all(job.meta is None for job in results.jobs.values()):
             return None
 
-        fig = self._build(results)
-        if fig is None:
-            return None
-
-        return fig.to_html(full_html=False, include_plotlyjs=False)
+        return super().render(results)
 
 
-class BlockVariantPieBreakdown(PieBreakdownVisualization):
-    """TODO"""
+class BlockVariantBreakdown(BreakdownVisualization):
+    """Breakdown pie/bar chart showing aggregated job duration per block (variant) tested."""
 
     title = "Runtime per Block"
 
     def __init__(self) -> None:
-        """TODO"""
+        """Construct a BlockVariantBreakdown."""
         super().__init__(group_type="block", group_fn=self._get_job_block_variant)
 
     def _get_job_block_variant(self, job: JobInstrumentationResults) -> str:
-        """TODO"""
+        """Get the block (variant) from a job's metadata, or 'Unknown' if it does not exist."""
         if job.meta is None:
             return "Unknown"
 
         return job.meta.block + (f"_{job.meta.block_variant}" if job.meta.block_variant else "")
 
     def render(self, results: InstrumentationResults) -> str | None:
-        """TODO"""
+        """Render a per-block breakdown graph from the instrumentation results as a HTML fragment.
+
+        If the required job timing or metadata information is not available (or there are no
+        jobs), just returns `None` instead.
+
+        """
         if all(job.meta is None for job in results.jobs.values()):
             return None
 
-        fig = self._build(results)
-        if fig is None:
-            return None
-
-        return fig.to_html(full_html=False, include_plotlyjs=False)
+        return super().render(results)
 
 
 # Register default / built-in instrumentation visualizations
@@ -1353,8 +1376,8 @@ def get_standard_instrumentations(*, uncapped: bool = False) -> list[Instrumenta
             max_bars=(None if uncapped else 20),
             max_jobs_per_bar=(None if uncapped else 6),
         ),
-        BlockVariantPieBreakdown(),
-        ToolPieBreakdown(),
+        BlockVariantBreakdown(),
+        ToolBreakdown(),
         ToolUsageLineGraph(),
         GanttChart(),
         ParallelismChart(),
@@ -1378,7 +1401,6 @@ def _make_fake_results_for_testing(
 
     from dvsim.instrumentation import (
         JobInstrumentationMetadata,
-        JobTimingMetrics,
     )
     from dvsim.instrumentation.records import (
         JobInstrumentationResults,

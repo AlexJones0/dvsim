@@ -20,14 +20,14 @@ from dvsim.instrumentation.report.base import (
     make_repeating_color_map,
 )
 
-# Default height in pixels for a usage/concurrency chart visualization
-DEFAULT_USAGE_CHART_HEIGHT_PX: int = 800
-
 
 class ConcurrencyLineGraph:
     """Renders plotly time series figures showing usage & concurrency info over time."""
 
     title = "Job Concurrency"
+
+    # Default height in pixels for a usage/concurrency chart visualization
+    DEFAULT_CHART_HEIGHT_PX: int = 800
 
     def __init__(
         self, *, group_fn: Callable[[JobInstrumentationResults], str] | None = None
@@ -103,7 +103,7 @@ class ConcurrencyLineGraph:
             )
 
         # Extra layout / formatting settings
-        height = min(DEFAULT_USAGE_CHART_HEIGHT_PX, DEFAULT_VISUALIZATION_HEIGHT_PX)
+        height = min(self.DEFAULT_CHART_HEIGHT_PX, DEFAULT_VISUALIZATION_HEIGHT_PX)
         fig.update_layout(
             template="plotly_white",
             title_text="<b>Job Concurrency over Time</b>",
