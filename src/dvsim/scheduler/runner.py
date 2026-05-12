@@ -7,7 +7,6 @@
 from collections.abc import Iterable
 
 from dvsim import instrumentation
-from dvsim.instrumentation.report import render_html_report
 from dvsim.job.data import CompletedJobStatus, JobSpec
 from dvsim.runtime.backend import RuntimeBackend
 from dvsim.runtime.fake import FakePolicy, FakeRuntimeBackend
@@ -142,7 +141,6 @@ async def run_scheduler(
     # Finalize instrumentation
     if inst is not None:
         inst.stop()
-        reports_dir = Path(self.scratch_base_path) / "reports"  # TODO: figure out integration here
-        # render_html_report(instrumentation.flush(), outdir=)
+        instrumentation.gen_html_report(instrumentation.flush())
 
     return results

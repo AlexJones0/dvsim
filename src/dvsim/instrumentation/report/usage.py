@@ -11,17 +11,18 @@ import plotly.colors as pc
 import plotly.graph_objects as go
 from plotly.graph_objs import Figure
 
-from dvsim.instrumentation import ConcreteJobTimingMetrics, InstrumentationResults
-from dvsim.instrumentation.records import JobInstrumentationResults
+from dvsim.instrumentation import InstrumentationResults
+from dvsim.instrumentation.records import ConcreteJobTimingMetrics, JobInstrumentationResults
 from dvsim.instrumentation.report.base import (
     DEFAULT_VISUALIZATION_HEIGHT_PX,
     PLOTLY_HTML_FRAGMENT_CONFIG,
     PLOTLY_TIMING_AXIS_CONFIG,
+    InstrumentationVisualizer,
     make_repeating_color_map,
 )
 
 
-class ConcurrencyLineGraph:
+class ConcurrencyLineGraph(InstrumentationVisualizer):
     """Renders plotly time series figures showing usage & concurrency info over time."""
 
     title = "Job Concurrency"

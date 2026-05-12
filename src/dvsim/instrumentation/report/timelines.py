@@ -12,16 +12,21 @@ from typing import Any
 import plotly.colors as pc
 import plotly.graph_objects as go
 from plotly.graph_objs import Figure
+from typing_extensions import Self
 
-from dvsim.instrumentation import ConcreteJobTimingMetrics, InstrumentationResults
+from dvsim.instrumentation import InstrumentationResults
+from dvsim.instrumentation.records import ConcreteJobTimingMetrics
 from dvsim.instrumentation.report.base import (
     DEFAULT_PNG_THRESHOLD,
     DEFAULT_VISUALIZATION_HEIGHT_PX,
     PLOTLY_TIMING_AXIS_CONFIG,
+    InstrumentationVisualizer,
+    RenderProfile,
     make_job_metadata_hover,
     make_repeating_color_map,
     render_large_figure,
 )
+from dvsim.logging import log
 from dvsim.utils import format_time_as_hms as format_time
 from dvsim.utils import format_time_metric
 
@@ -47,15 +52,16 @@ class TimelineResult:
     meta: TimelineMeta
 
 
-class TimelineBarChart:
+class TimelineBarChart(InstrumentationVisualizer):
     """Renders plotly bar chart figures showing scheduler job timeline information."""
 
     def __init__(
         self,
         *,
-        squashed: bool,
-        apply_bar_scaling: bool,
+        squashed: bool = False,
+        apply_bar_scaling: bool = True,
         bar_px_range: tuple[int, int] = (DEFAULT_MIN_BAR_PX, DEFAULT_MAX_BAR_PX),
+        png_threshold: int | None = DEFAULT_PNG_THRESHOLD,
     ) -> None:
         """Construct a TimelineBarChart.
 
@@ -65,12 +71,15 @@ class TimelineBarChart:
             apply_bar_scaling: Enable the ability to automatically increase the bar thickness. This
               will make bars more visible on larger graphs, but will cause bars to overlap.
             bar_px_range: tuple of (min, max) range of pixels that each bar is allowed to occupy.
+            png_threshold: If more than this many bars are provided, the graph will be rendered as
+              a PNG for space/performance optimization. If `None`, this will never happen.
 
         """
         self.squashed: bool = squashed
         self.apply_bar_scaling: bool = apply_bar_scaling
         self.min_bar_px: int = bar_px_range[0]
         self.max_bar_px: int = bar_px_range[1]
+        self.png_threshold = png_threshold
 
         # Margins to render the bar chart with
         self.margins: dict[str, int] = {"t": 80, "b": 40, "l": 50, "r": 20}
@@ -114,7 +123,7 @@ class TimelineBarChart:
     def _compute_bar_thickness(self, num_indices: int) -> float:
         """Compute the bar thickness (in visual units, not px) to use for this chart.
 
-        Below a configured threshold (DEFAULT_PNG_THRESHOLD) we always render at a minimum width.
+        Below a configured threshold (`DEFAULT_PNG_THRESHOLD`) we always render at a minimum width.
         After this 'knee', we linearly scale the width to ensure visibility for large amounts.
 
         """
@@ -262,10 +271,32 @@ class TimelineBarChart:
         return render_large_figure(
             fig,
             num_points=build_output.meta.num_jobs,
+            interactivity_limit=self.png_threshold,
             # If rendering as PNG, use a 2:1 aspect ratio.
             png_width=DEFAULT_VISUALIZATION_HEIGHT_PX * 2,
             png_height=DEFAULT_VISUALIZATION_HEIGHT_PX,
         )
+
+    @classmethod
+    def for_profile(cls, profile: RenderProfile) -> Self:
+        """Create a visualizer instance configured for a given rendering profile."""
+        if profile == RenderProfile.HIGH:
+            png_threshold = DEFAULT_PNG_THRESHOLD * 10
+            log.debug(
+                "Using render profile '%s' for '%s' visualization. Setting PNG threshold to %d.",
+                profile.name,
+                cls.title,
+                png_threshold,
+            )
+            return cls(png_threshold=png_threshold)
+        if profile == RenderProfile.FULL:
+            log.debug(
+                "Using render profile '%s' for '%s' visualization. Disabling PNG threshold.",
+                profile.name,
+                cls.title,
+            )
+            return cls(png_threshold=None)
+        return cls()
 
 
 class GanttChart(TimelineBarChart):
@@ -273,9 +304,15 @@ class GanttChart(TimelineBarChart):
 
     title = "Job Timeline"
 
-    def __init__(self) -> None:
-        """Construct a GanttChart."""
-        super().__init__(squashed=False, apply_bar_scaling=True)
+    def __init__(self, png_threshold: int | None = DEFAULT_PNG_THRESHOLD) -> None:
+        """Construct a GanttChart.
+
+        Args:
+            png_threshold: If more than this many bars are provided, the graph will be rendered as
+              a PNG for space/performance optimization. If `None`, this will never happen.
+
+        """
+        super().__init__(squashed=False, apply_bar_scaling=True, png_threshold=png_threshold)
 
     def render(self, results: InstrumentationResults) -> str | None:
         """Render a Gantt chart visualization from the instrumentation results as a HTML fragment.
@@ -311,9 +348,15 @@ class ParallelismChart(TimelineBarChart):
 
     title = "Job Parallelism"
 
-    def __init__(self) -> None:
-        """Construct a ParallelismChart."""
-        super().__init__(squashed=True, apply_bar_scaling=True)
+    def __init__(self, png_threshold: int | None = DEFAULT_PNG_THRESHOLD) -> None:
+        """Construct a class ParallelismChart(TimelineBarChart):.
+
+        Args:
+            png_threshold: If more than this many bars are provided, the graph will be rendered as
+              a PNG for space/performance optimization. If `None`, this will never happen.
+
+        """
+        super().__init__(squashed=True, apply_bar_scaling=True, png_threshold=png_threshold)
 
     def render(self, results: InstrumentationResults) -> str | None:
         """Render a parallelism visualization from the instrumentation results as a HTML fragment.

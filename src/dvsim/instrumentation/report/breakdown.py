@@ -13,21 +13,20 @@ import plotly.graph_objects as go
 from plotly.graph_objs import Figure
 from plotly.subplots import make_subplots
 
-from dvsim.instrumentation import (
-    InstrumentationResults,
-)
+from dvsim.instrumentation import InstrumentationResults
 from dvsim.instrumentation.records import JobInstrumentationResults
 from dvsim.instrumentation.report.base import (
     DEFAULT_VISUALIZATION_HEIGHT_PX,
     PLOTLY_HTML_FRAGMENT_CONFIG,
     PLOTLY_TIMING_AXIS_CONFIG,
+    InstrumentationVisualizer,
     make_repeating_color_map,
 )
 from dvsim.utils import format_time_as_hms as format_time
 from dvsim.utils import format_time_metric
 
 
-class BreakdownVisualization:
+class BreakdownVisualization(InstrumentationVisualizer):
     """Renders pie & bar-chart figures showing job duration breakdown via some grouping."""
 
     title = "Job Breakdown"

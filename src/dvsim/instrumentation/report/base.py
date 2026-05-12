@@ -6,13 +6,16 @@
 
 import base64
 from collections.abc import Iterable, Mapping, Sequence
+from enum import Enum
 from pathlib import Path
 from typing import Any, Protocol, TypeVar
 
 import plotly.offline
 from plotly.graph_objs import Figure
+from typing_extensions import Self
 
-from dvsim.instrumentation import InstrumentationResults, JobInstrumentationMetadata
+from dvsim.instrumentation import InstrumentationResults
+from dvsim.instrumentation.records import JobInstrumentationMetadata
 from dvsim.logging import log
 from dvsim.report.artifacts import ReportArtifacts, render_static_content
 from dvsim.templates.render import render_template
@@ -23,6 +26,7 @@ __all__ = (
     "PLOTLY_HTML_FRAGMENT_CONFIG",
     "PLOTLY_TIMING_AXIS_CONFIG",
     "InstrumentationVisualizer",
+    "RenderProfile",
     "make_job_metadata_hover",
     "make_repeating_color_map",
     "render_html_report",
@@ -56,6 +60,14 @@ PLOTLY_TIMING_AXIS_CONFIG: dict[str, Any] = {
 }
 
 
+class RenderProfile(Enum):
+    """Levels of visualization rendering detail, which impact report size & responsiveness."""
+
+    NORMAL = "normal"
+    HIGH = "high"
+    FULL = "full"
+
+
 class InstrumentationVisualizer(Protocol):
     """Builder & renderer for HTML instrumentation visualizations."""
 
@@ -71,6 +83,12 @@ class InstrumentationVisualizer(Protocol):
 
         """
         ...
+
+    @classmethod
+    def for_profile(cls, profile: RenderProfile) -> Self:
+        """Create a visualizer instance configured for a given rendering profile (if supported)."""
+        log.debug("Render profile %s not used by visualization '%s'", profile.name, cls.__name__)
+        return cls()
 
 
 def render_html_report(
@@ -146,7 +164,7 @@ def render_large_figure(
     fig: Figure,
     *,
     num_points: int | None = None,
-    interactivity_limit: int = DEFAULT_PNG_THRESHOLD,
+    interactivity_limit: int | None = DEFAULT_PNG_THRESHOLD,
     png_width: int | None = None,
     png_height: int | None = None,
 ) -> str:
@@ -155,7 +173,8 @@ def render_large_figure(
     Args:
         fig: The figure to render.
         num_points: The number of points/bars/entities in the figure.
-        interactivity_limit: Over this limit, render as a PNG instead of dynamic HTML .
+        interactivity_limit: Over this limit, render as a PNG instead of dynamic HTML.
+          If None, there is no limit and this will always render as dynamic HTML.
         png_width: If rendering as a PNG, use this width. If not given, try to use the figure's
           width defined on its layout. As a last resort, use `DEFAULT_VISUALIZATION_HEIGHT_PX`.
         png_height: If rendering as a PNG, use this height. If not given, try to use the figure's
@@ -165,7 +184,7 @@ def render_large_figure(
         A HTML string fragment comprising either the dynamic graph HTML or the encoded PNG.
 
     """
-    if num_points is None or num_points <= interactivity_limit:
+    if num_points is None or interactivity_limit is None or num_points <= interactivity_limit:
         return fig.to_html(**PLOTLY_HTML_FRAGMENT_CONFIG)
 
     log.debug(
