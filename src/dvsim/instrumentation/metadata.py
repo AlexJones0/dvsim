@@ -41,7 +41,7 @@ class MetadataInstrumentation(SchedulerInstrumentation):
                 job_type=spec.job_type,
                 target=spec.target,
                 tool=spec.tool.name,
-                block=spec.block,
+                block=spec.block.name,
                 block_variant=spec.block.variant,
                 backend=spec.backend,
                 dependencies=list(spec.dependencies),

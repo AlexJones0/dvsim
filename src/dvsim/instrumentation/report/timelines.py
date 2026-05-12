@@ -337,6 +337,7 @@ class GanttChart(TimelineBarChart):
         return render_large_figure(
             fig,
             num_points=build_output.meta.num_jobs,
+            interactivity_limit=self.png_threshold,
             # If rendering as PNG, use a 2:1 aspect ratio.
             png_width=DEFAULT_VISUALIZATION_HEIGHT_PX * 2,
             png_height=DEFAULT_VISUALIZATION_HEIGHT_PX,
@@ -382,6 +383,7 @@ class ParallelismChart(TimelineBarChart):
         rendered_fig = render_large_figure(
             fig,
             num_points=build_output.meta.num_jobs,
+            interactivity_limit=self.png_threshold,
             # If rendering as PNG, use a 2:1 aspect ratio.
             png_width=DEFAULT_VISUALIZATION_HEIGHT_PX * 2,
             png_height=DEFAULT_VISUALIZATION_HEIGHT_PX,

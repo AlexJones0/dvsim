@@ -572,9 +572,10 @@ class LongestTestsByToolChart(LongestByToolChart):
         """Create a visualizer instance configured for a given rendering profile."""
         if profile == RenderProfile.HIGH:
             max_bars = cls.DEFAULT_MAX_BARS * 4
-            max_jobs_per_bar = cls.DEFAULT_MAX_JOBS_PER_BAR * 4
+            max_jobs_per_bar = (cls.DEFAULT_MAX_JOBS_PER_BAR - 1) * 4 + 1
             log.debug(
-                "Using render profile '%s' for '%s visualization. Setting max bars to %d and max jobs per bar to %d.",
+                "Using render profile '%s' for '%s visualization. Setting max bars to %d "
+                "and max jobs per bar to %d.",
                 profile.name,
                 cls.title,
                 max_bars,
@@ -583,7 +584,8 @@ class LongestTestsByToolChart(LongestByToolChart):
             return cls(max_bars=max_bars, max_jobs_per_bar=max_jobs_per_bar)
         if profile == RenderProfile.FULL:
             log.debug(
-                "Using render profile '%s' for '%s' visualization. Disabling max bars and max jobs per bar.",
+                "Using render profile '%s' for '%s' visualization. Disabling max bars and "
+                "max jobs per bar.",
                 profile.name,
                 cls.title,
             )
@@ -656,10 +658,11 @@ class LongestTestsByBlockChart(LongestByBlockChart):
     def for_profile(cls, profile: RenderProfile) -> Self:
         """Create a visualizer instance configured for a given rendering profile."""
         if profile == RenderProfile.HIGH:
-            max_bars = cls.DEFAULT_MAX_BARS * 4
-            max_jobs_per_bar = cls.DEFAULT_MAX_JOBS_PER_BAR * 4
+            max_bars = cls.DEFAULT_MAX_BARS * 5
+            max_jobs_per_bar = (cls.DEFAULT_MAX_JOBS_PER_BAR - 1) * 5 + 1
             log.debug(
-                "Using render profile '%s' for '%s visualization. Setting max bars to %d and max jobs per bar to %d.",
+                "Using render profile '%s' for '%s visualization. Setting max bars to %d "
+                "and max jobs per bar to %d.",
                 profile.name,
                 cls.title,
                 max_bars,
@@ -668,7 +671,8 @@ class LongestTestsByBlockChart(LongestByBlockChart):
             return cls(max_bars=max_bars, max_jobs_per_bar=max_jobs_per_bar)
         if profile == RenderProfile.FULL:
             log.debug(
-                "Using render profile '%s' for '%s' visualization. Disabling max bars and max jobs per bar.",
+                "Using render profile '%s' for '%s' visualization. Disabling max bars and "
+                "max jobs per bar.",
                 profile.name,
                 cls.title,
             )

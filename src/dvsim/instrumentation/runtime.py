@@ -98,9 +98,9 @@ def gen_html_report(
 
     """
     if outdir is None:
+        if _runtime.report_path is None:
+            return
         outdir = _runtime.report_path.parent
-    if outdir is None:
-        return
 
     log.debug("HTML instrumentation report will be written to %s", outdir)
     visualizations = ReportVisualizationRegistry.create(profile)
