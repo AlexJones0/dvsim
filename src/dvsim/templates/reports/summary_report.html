@@ -54,7 +54,7 @@
                 sha: {{ meta_info.commit_short }}
             </a>
             <a class="badge text-bg-secondary link-underline link-underline-opacity-0"
-                href="index.json">json</a>
+                href="index.json">JSON</a>
             <span class="badge text-bg-secondary">
                 Branch: {{ meta_info.branch }}
             </span>
@@ -64,10 +64,10 @@
             </span>
             {% endif %}
         </div>
-        {% if instrumentation_report_file %}
+        {% if instrumentation_report %}
         <div class="col-4 col-md-3">
             <a class="badge text-bg-secondary link-underline link-underline-opacity-0"
-                style="font-size: 16px;" href="{{ instrumentation_report_file }}">
+                style="font-size: 15px;" href="{{ instrumentation_report }}">
                 Instrumentation Report
             </a>
         </div>

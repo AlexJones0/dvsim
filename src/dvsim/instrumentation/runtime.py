@@ -87,6 +87,7 @@ def gen_html_report(
     *,
     profile: RenderProfile | None = None,
     outdir: Path | None = None,
+    json_path: Path | None = None,
 ) -> None:
     """Generate a HTML report of the instrumentation results with rendered visualizations.
 
@@ -94,7 +95,9 @@ def gen_html_report(
         results: The instrumentation results to render a HTML report for.
         profile: Optional rendering profile to customize level of detail vs. report optimization.
         outdir: The path to the directory to write the generated HTML report files to. If not
-        provided, this defaults to the parent directory of the configured report path.
+          provided, this defaults to the parent directory of the configured report path.
+        json_path: The path to the metrics.json file. If not provided, this defaults to the
+          configured report path (if it exists).
 
     """
     if outdir is None:
@@ -102,6 +105,9 @@ def gen_html_report(
             return
         outdir = _runtime.report_path.parent
 
+    if json_path is None:
+        json_path = _runtime.report_path
+
     log.debug("HTML instrumentation report will be written to %s", outdir)
     visualizations = ReportVisualizationRegistry.create(profile)
-    render_html_report(results, visualizations=visualizations, outdir=outdir)
+    render_html_report(results, visualizations=visualizations, outdir=outdir, json_path=json_path)

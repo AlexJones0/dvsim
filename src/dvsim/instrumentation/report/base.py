@@ -96,6 +96,7 @@ def render_html_report(
     *,
     visualizations: Sequence[InstrumentationVisualizer] | None = None,
     outdir: Path | None = None,
+    json_path: Path | None = None,
 ) -> ReportArtifacts:
     """Render a HTML instrumentation report for some results & visualizations.
 
@@ -103,6 +104,7 @@ def render_html_report(
         results: The instrumentation results to generate a report from.
         visualizations: The list of visualizations (if any) to display in the report.
         outdir: The optional directory to write the 'metrics.html' report to, if desired.
+        json_path: Optional path to the 'metrics.json' file.
 
     Returns:
         The generated file contents for  the report - 'metrics.html' and static CSS/JS content.
@@ -124,6 +126,9 @@ def render_html_report(
             log.info("Rendered instrumentation visualization: %s", vis.title)
             renders.append((vis, render))
 
+    metrics_json_path = None if json_path is None else json_path
+    if metrics_json_path and outdir and metrics_json_path.is_relative_to(outdir):
+        metrics_json_path = metrics_json_path.relative_to(outdir)
     if outdir is not None:
         outdir.mkdir(parents=True, exist_ok=True)
 
@@ -131,7 +136,8 @@ def render_html_report(
 
     # Render the visualizations to a single metrics.html file
     artifacts["metrics.html"] = render_template(
-        path="reports/instrumentation_report.html", data={"renders": renders}
+        path="reports/instrumentation_report.html",
+        data={"renders": renders, "metrics_json": metrics_json_path},
     )
     if outdir is not None:
         report_path = outdir / "metrics.html"
