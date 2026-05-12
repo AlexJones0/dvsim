@@ -306,7 +306,7 @@ class TimelineBarChart:
         assignments: dict[str, int] = {}  # assignments of (job ID -> slot ID)
         next_slot_id: int = 0
 
-        # Greedy assignment (same approach as interval partitioning problem)
+        # Greedy assignment, take the last known free slot.
         for job_id, timing in jobs_by_start_time:
             if timing.start_time is None or timing.end_time is None:
                 continue
@@ -581,314 +581,430 @@ class ParallelismChart(TimelineBarChart):
         return rendered_fig
 
 
-class LongestJobsVisualization:
-    """TODO"""
+@dataclass(frozen=True)
+class TestAggregateInfo:
+    """Computed aggregate information about a test in a scheduler run."""
+
+    name: str  # name of the test
+    jobs: list[str]  # list of job IDs for different test seeds, sorted by duration, descending
+    duration: float  # combined test duration, in seconds
+    ordinal: int  # position / ranking relative to all tests, by decreasing duration
+    timings: dict[str, ConcreteJobTimingMetrics]  # mapping from test jobs to their timings
+
+
+class LongestBarChart:
+    """Renders plotly bar chart figures ranking the longest jobs/tests in the scheduler."""
 
     title = "Longest Jobs"
 
-    MARGINS: dict[str, int] = {"t": 100, "b": 40, "l": 160, "r": 40}
+    # Standard layout & formatting configuration
     MAX_NAME_CHARS: int = 40
+    DROPDDOWN_KEY_THRESHOLD: int = 5
+    ALL_KEY: str = "All categories"
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         *,
-        max_bars: int | None = None,
-        max_jobs_per_bar: int | None = None,
-        category_fn: Callable[[JobInstrumentationResults], str | None] | None = None,
-        test_group_fn: Callable[[JobInstrumentationResults], str | None] | None = None,
-        color_fn: Callable[[str], Any] | None = None,
-        allow_missing_meta: bool = False,
-    ) -> None:
-        """TODO"""
-        if test_group_fn is None and max_jobs_per_bar:
-            log.warning("Setting max_jobs_per_bar is meaningless without grouping jobs into tests")
-
-        self.max_bars = max_bars
-        self.max_jobs_per_bar = max_jobs_per_bar
-        self.category_fn = category_fn
-        self.test_group_fn = test_group_fn
-        self.color_fn = color_fn
-        self.allow_missing_meta = allow_missing_meta
-
-    def _trace_visibility(self, num_traces: int, trace_idx: int) -> list[bool]:
-        """TODO"""
-        return [i == trace_idx for i in range(num_traces)]
-
-    def render(self, results: InstrumentationResults) -> str | None:
-        """TODO"""
-        job_timings = results.job_timings()
-        if not job_timings:
-            return None
-        if not self.allow_missing_meta and all(job.meta is None for job in results.jobs.values()):
-            return None
-
-        # TODO: repetition, refactor
-        jobs_by_longest_duration = sorted(
-            job_timings.items(), key=lambda kv: kv[1].duration, reverse=True
-        )
-
-        # Group items
-        jobs_per_group: dict[str, list[str]] = defaultdict(list)
-        group_durations: dict[str, float] = defaultdict(float)
-        for job_id, timing in jobs_by_longest_duration:
-            if self.test_group_fn is not None:
-                group = self.test_group_fn(results.jobs[job_id])
-                jobs_per_group[group].append(job_id)
-                group_durations[group] += timing.duration
-            else:
-                jobs_per_group[job_id].append(job_id)
-                group_durations[job_id] = timing.duration
-
-        # TODO: reorganize some of this logic to make it cleaner
-        num_jobs = len(job_timings)
-        num_groups = len(group_durations)
-        item_type = "jobs" if self.test_group_fn is None else "tests"
-        if self.max_bars is None or num_groups <= self.max_bars:
-            num_visible_items = num_groups
-            y_range = None
-            title_job_desc = f"{num_groups:,} {item_type}"
-        else:
-            num_visible_items = self.max_bars
-            y_range = [num_visible_items - 0.5, -0.5]  # TODO, is this needed still
-            title_job_desc = f"top {num_visible_items} of {num_groups} {item_type}"
-
-        # TODO: repetition, refactor
-        groups_by_longest_duration = sorted(
-            group_durations.items(), key=lambda kv: kv[1], reverse=True
-        )
-        group_ordinals = {
-            group: i for i, (group, _) in enumerate(groups_by_longest_duration, start=1)
-        }
-
-        # TODO comment this better
-        top_by_category: dict[str, list[str]] = defaultdict(list)
-        top_by_category["All categories"] = [
-            group for (group, _) in groups_by_longest_duration[:num_visible_items]
-        ]
-        for group, _ in groups_by_longest_duration:
-            if self.category_fn is not None:
-                jobs = jobs_per_group[group]
-                keys = {job_id: self.category_fn(results.jobs[job_id]) for job_id in jobs}
-                unique_keys = set(keys.values())
-                key = next(iter(unique_keys))
-                if len(unique_keys) != 1:
-                    # TODO: could combine keys into flaky for status?
-                    log.error(
-                        "Got multiple different categories for jobs in the same group: %s\n",
-                        "Using the first key %s as a fallback.",
-                        keys,
-                        key,
-                    )
-                # TODO: handle none key better?
-                if key is not None and len(top_by_category[key]) < num_visible_items:
-                    top_by_category[key].append(group)
-        categories: list[str] = sorted(top_by_category.keys())
-        categories.remove("All categories")
-        categories.insert(0, "All categories")
-        num_categories = len(categories)
-        if self.color_fn is None:
-            color_map = make_repeating_color_map(sorted(categories), pc.qualitative.Plotly)
-        else:
-            color_map = {key: self.color_fn(key) for key in categories}
-
-        traces: list[go.Bar] = []
-        menu_buttons: list[dict[str, Any]] = []
-        for i, key in enumerate(categories):
-            groups = top_by_category[key]
-            max_ordinal = max(group_ordinals[group] for group in groups)
-            ordinal_len = len(str(max_ordinal))
-
-            durations, hovers, job_names, marker_colors = [], [], [], []
-            for group in groups:
-                group_duration = group_durations[group]
-                group_ordinal = group_ordinals[group]
-                jobs = jobs_per_group[group]
-
-                # TODO explain: unfortunately still need to be unique due to a limitation in plotly presentation.
-                # Does not let us have auto tick scaling (which we need for the size of our data) with tickmode="array"
-                # which we need to give custom names because job IDs are too long. So define shortened names that
-                # are guaranteed to be unique by prefixing them with their ordinal position.
-                id_prefix = (
-                    group
-                    if len(group) < self.MAX_NAME_CHARS
-                    else group[: self.MAX_NAME_CHARS - 3] + "..."
-                )
-                display_name = f"{group_ordinal:0{ordinal_len}d}: {id_prefix} "
-
-                # Display jobs within groups shortest to longest (shortest bars first)
-                jobs = list(reversed(jobs))
-
-                # It's too slow & too much data to display all the bars. Combine the smallest ones.
-                max_jobs = self.max_jobs_per_bar or len(jobs)
-                num_combined_jobs = len(jobs) - max_jobs + 1
-                if num_combined_jobs <= 1:
-                    num_combined_jobs = 0
-                if num_combined_jobs > 1:
-                    combined_jobs = jobs[:num_combined_jobs]
-                    job_durations = [job_timings[job_id].duration for job_id in combined_jobs]
-                    total_duration = sum(job_durations)
-                    max_duration = max(job_durations)
-                    min_duration = min(job_durations)
-                    avg_duration = total_duration / num_combined_jobs
-                    extra_timing_info = [
-                        f"{num_combined_jobs} other jobs (combined)",
-                        f"Number of seeds: {len(jobs)}",
-                        f"Combined Duration: {format_time(total_duration)} ({total_duration:.2f}s)",
-                        f"Mean Duration: {format_time(avg_duration)} ({avg_duration:.2f}s)",
-                        f"Maximum Duration: {format_time(max_duration)} ({max_duration:.2f}s)",
-                        f"Minimum Duration: {format_time(min_duration)} ({min_duration:.2f}s)",
-                    ]
-                    first_job = results.jobs[combined_jobs[0]]
-                    hover = make_job_metadata_hover(group, extra_timing_info, first_job.meta)
-                    # TODO: modularize with the logic to do this for groups from before?
-                    # TODO: assumes first job is correct key for now, could also maybe precompute these somewhere
-                    group_key = self.category_fn(first_job) if key == "All categories" else key
-
-                    durations.append(total_duration)
-                    hovers.append(hover)
-                    job_names.append(display_name)
-                    marker_colors.append(color_map.get(group_key))
-
-                # Render the remainder of the jobs in full detail
-                for job_id in jobs[num_combined_jobs:]:
-                    timings = job_timings[job_id]
-
-                    # TODO: probably can be dict now, not list?
-                    extra_timing_info = []
-                    if self.test_group_fn is not None:
-                        extra_timing_info += [
-                            f"Number of seeds: {len(jobs)}",
-                            f"Test Duration (all seeds combined): {format_time(group_duration)} ({group_duration:.2f}s)",
-                            f"Test Ranking (all seeds combined): {group_ordinal}{ordinal_suffix(group_ordinal)} longest",
-                        ]
-                    extra_timing_info += [
-                        f"Duration: {format_time(timings.duration)} ({timings.duration:.2f}s)",
-                    ]
-                    hover = make_job_metadata_hover(
-                        job_id, extra_timing_info, results.jobs[job_id].meta
-                    )
-                    job_key = (
-                        self.category_fn(results.jobs[job_id]) if key == "All categories" else key
-                    )
-                    # TODO: not a particularly nice way to handle the 'None' case.
-                    job_key = job_key or "All categories"
-
-                    durations.append(timings.duration)
-                    hovers.append(hover)
-                    job_names.append(display_name)
-                    marker_colors.append(color_map.get(job_key))
-
-            traces.append(
-                go.Bar(
-                    orientation="h",
-                    x=durations,
-                    y=job_names,
-                    customdata=hovers,
-                    marker_color=marker_colors,
-                    hovertemplate="%{customdata}<extra></extra>",
-                    visible=False,
-                )
-            )
-
-            menu_buttons.append(
-                dict(
-                    label=key,
-                    method="update",
-                    args=[dict(visible=self._trace_visibility(num_categories, i))],
-                )
-            )
-
-        traces[0].visible = True
-
-        if num_categories <= 8:
-            updatemenu_type = "buttons"
-            updatemenu_direction = "right"
-        else:
-            updatemenu_type = "dropdown"
-            updatemenu_direction = "down"
-
-        fig = go.Figure(data=traces)
-        fig.update_layout(
-            template="plotly_white",
-            title_text=f"<b>{item_type.capitalize()} by longest duration ({title_job_desc})</b>",
-            title_y=0.97,
-            title_x=0.5,
-            title_xanchor="center",
-            height=DEFAULT_VISUALIZATION_HEIGHT_PX,  # TODO: modularize the bar chart scaling code and re-use it here
-            margin=self.MARGINS,
-            bargap=0.05,
-            showlegend=False,
-        )
-        if len(menu_buttons) > 1:
-            fig.update_layout(
-                updatemenus=[
-                    dict(
-                        type=updatemenu_type,
-                        direction=updatemenu_direction,
-                        bgcolor="rgba(230,230,230,0.9)",
-                        bordercolor="rgba(0,0,0,0)",
-                        borderwidth=0,
-                        pad=dict(r=8, t=0, b=0),
-                        font=dict(size=13),
-                        showactive=True,
-                        x=0.0,
-                        xanchor="left",
-                        y=1.055,  # TODO: magic constants
-                        buttons=menu_buttons,
-                    )
-                ],
-            )
-        fig.update_yaxes(autorange="reversed")
-        fig.update_xaxes(title="Duration (s)", showgrid=True)
-        if y_range:  # TODO: is still needed?
-            fig.update_yaxes(range=y_range)
-
-        # Assume figure is never large enough to render to PNG because we control the limit here.
-        return fig.to_html(full_html=False, include_plotlyjs=False)
-
-
-class LongestTestsVisualization(LongestJobsVisualization):
-    """TODO"""
-
-    def __init__(
-        self,
-        *,
-        max_bars: int | None = None,
-        max_jobs_per_bar: int | None = None,
-        category_fn: Callable[[JobInstrumentationResults], str | None] | None = None,
+        category_fn: Callable[[JobInstrumentationResults], str] | None = None,
         color_fn: Callable[[str], Any] | None = None,
         group_tests: bool = False,
+        max_bars: int | None = None,
+        max_jobs_per_bar: int | None = None,
         allow_missing_meta: bool = False,
+        allow_isomorphic: bool = False,
     ) -> None:
-        """TODO"""
-        if allow_missing_meta and group_tests:
-            log.warning("Metadata is required to group jobs into tests; requiring it anyway.")
-            allow_missing_meta = False
-        group_fn = self.get_job_test if group_tests else None
-        super().__init__(
-            max_bars=max_bars,
-            max_jobs_per_bar=max_jobs_per_bar,
-            category_fn=category_fn,
-            test_group_fn=group_fn,
-            color_fn=color_fn,
-            allow_missing_meta=allow_missing_meta,
-        )
+        """Construct a LongestBarChart.
 
-    def get_job_test(self, job: JobInstrumentationResults) -> str | None:
-        """TODO"""
+        Args:
+            category_fn: Optional function to split jobs into groups by name. The top N items will
+              be collected & displayed for each category, with a button to show each trace. If not
+              provided, only an "overall" trace is shown.
+            color_fn: Optional function to provide color mapping information for specific groups.
+            group_tests: Flag to group jobs of the same test by name. This allows timing results
+              for the same tests to be combined in a stacked bar view.
+            max_bars: The maximum number of bars to show in each group (& overall).
+            max_jobs_per_bar: If group_tests=True, the maximum number of stacked bars to
+              render per bar. If there are too many bars to display, the bottom
+              (N - max_jobs_per_bar + 1) jobs will be combined into a single bar.
+            allow_missing_meta: Whether the figure should still render even if metadata is missing.
+            allow_isomorphic: Whether the figure should still render even if the mapped tests are
+              isomorphic to the jobs (i.e. each job is 1-to-1 with a test; there is no extra info
+              provided by grouping the tests despite trying).
+
+        """
+        if not group_tests and max_jobs_per_bar:
+            log.warning("Setting max_jobs_per_bar is meaningless without grouping jobs into tests")
+        if not group_tests and allow_isomorphic:
+            log.warning("Setting allow_isomorphic is meaningless without grouping jobs into tests")
+
+        self.category_fn = category_fn
+        self.color_fn = color_fn
+        self.group_tests = group_tests
+        self.max_bars = max_bars
+        self.max_jobs_per_bar = max_jobs_per_bar
+        self.allow_missing_meta = allow_missing_meta
+        self.allow_isomorphic = allow_isomorphic
+
+        # Default margin layout information
+        self.margins = {"t": 100, "b": 40, "l": 160, "r": 40}
+
+    def get_job_test(self, job_id: str, job: JobInstrumentationResults) -> str | None:
+        """Get the test name for a given job (should be the same for all seeds of a given test)."""
         if job.meta is None:
             return None
+
+        # Do not group non-test jobs (building, coverage merging and reporting).
+        # These can be identified by their lack of seeds at the end of their IDs.
+        if not job_id.strip().split(".")[-1].isdigit():
+            return job_id
+
         variant_name = job.meta.block
         if job.meta.block_variant:
             variant_name += f"_{job.meta.block_variant}"
         return f"{variant_name}:{job.meta.name}"
 
+    def _get_job_color(
+        self, color_map: dict[str, str], job: JobInstrumentationResults, key: str
+    ) -> str:
+        """Get the color to render a job bar."""
+        if self.category_fn is not None:
+            return color_map[self.category_fn(job)]
+        return color_map[key]
 
-class LongestJobsByStatusVisualization(LongestTestsVisualization):
-    """TODO"""
+    def _compute_test_aggregates(
+        self, results: InstrumentationResults
+    ) -> dict[str, TestAggregateInfo]:
+        """Combine jobs into tests (if enabled) and compute aggregate information about tests.
+
+        Args:
+            results: The instrumentation results to compute test aggregates for.
+
+        Returns:
+            A mapping of (test name -> aggregate info), ordered by decreasing duration.
+
+        """
+        job_timings = results.job_timings()
+        if not job_timings:
+            return {}
+
+        longest_jobs = sorted(job_timings.items(), key=lambda kv: kv[1].duration, reverse=True)
+
+        # Group jobs into tests if configured to do so
+        jobs_per_test: dict[str, list[str]] = defaultdict(list)
+        test_durations: dict[str, float] = defaultdict(float)
+        for job_id, timing in longest_jobs:
+            if self.group_tests:
+                test_group = self.get_job_test(job_id, results.jobs[job_id]) or job_id
+                jobs_per_test[test_group].append(job_id)
+                test_durations[test_group] += timing.duration
+            else:
+                # If no test grouping function is given, tests are isomorphic to jobs
+                jobs_per_test[job_id].append(job_id)
+                test_durations[job_id] = timing.duration
+
+        # If we get no additional data from grouping, we optionally stop rendering here.
+        if self.group_tests and not self.allow_isomorphic:
+            if len(jobs_per_test) == len(job_timings):
+                log.debug("Not emitting grouped graph '%s' due to test isomorphism.", self.title)
+                return {}
+
+        longest_tests = sorted(test_durations.items(), key=lambda kv: kv[1], reverse=True)
+        test_ordinals = {test_group: i for i, (test_group, _) in enumerate(longest_tests, start=1)}
+
+        # Aggregate info about each test together, returning in order of decreasing duration
+        return {
+            test: TestAggregateInfo(
+                name=test,
+                jobs=jobs_per_test[test],
+                duration=test_durations[test],
+                ordinal=ordinal,
+                timings={job: job_timings[job] for job in jobs_per_test[test]},
+            )
+            for test, ordinal in test_ordinals.items()
+        }
+
+    def _get_top_tests_by_category(
+        self, results: InstrumentationResults, tests: dict[str, TestAggregateInfo], num_tests: int
+    ) -> dict[str, list[str]]:
+        """Split test items into categories and get the top N tests of each category.
+
+        Args:
+            results: The instrumentation results.
+            tests: The mapping of tests computed from the instrumentation results.
+            num_tests: The max number of tests to be computed for each category.
+
+        Returns:
+            A mapping of (category -> list of tests), where the list of tests are sorted in
+            descending ranking order. The first category is a special case equivalent to the
+            top N tests in *all* categories combined.
+
+        """
+        # Split items into categories and get the top items (tests) of each category.
+        top_by_category: dict[str, list[str]] = defaultdict(list)
+        top_by_category[self.ALL_KEY] = [t.name for t in list(tests.values())[:num_tests]]
+
+        for test_group, test_info in tests.items():
+            if self.category_fn is None:
+                continue
+
+            # If we are grouping jobs into tests, check that they all report the same category.
+            # If they for some reason do not, warn and just choose the first one.
+            keys = {job_id: self.category_fn(results.jobs[job_id]) for job_id in test_info.jobs}
+            unique_keys = set(keys.values())
+            test_group_key = next(iter(unique_keys))
+            if len(unique_keys) != 1:
+                log.error(
+                    "Got multiple different categories for jobs in the same group: %s\n"
+                    "Using the first key '%s' as a fallback.",
+                    keys,
+                    test_group_key,
+                )
+            if len(top_by_category[test_group_key]) < num_tests:
+                top_by_category[test_group_key].append(test_group)
+
+        return top_by_category
+
+    def _make_combined_bar_info(
+        self,
+        test: TestAggregateInfo,
+        jobs: list[str],
+        meta: JobInstrumentationMetadata | None,
+    ) -> tuple[float, str]:
+        """Get job information for a bar that combines a subset of a test's jobs/seeds.
+
+        Args:
+            test: The test to create a combined bar for.
+            jobs: The jobs (subset of test.jobs) to create a combined for.
+            meta: Metadata about the test/jobs, if any exists.
+
+        Returns:
+            A tuple (combined duration, hover tooltip) for the combined bar.
+
+        """
+        if not jobs:
+            raise ValueError("Cannot make a combined bar from a subset of no jobs.")
+
+        num_combined_jobs = len(jobs)
+        job_durations = [test.timings[job_id].duration for job_id in jobs]
+
+        total_duration = sum(job_durations)
+        max_duration = max(job_durations)
+        min_duration = min(job_durations)
+        avg_duration = total_duration / num_combined_jobs
+        rank_str = f"{test.ordinal}{ordinal_suffix(test.ordinal)} longest"
+        extra_timing_info = [
+            f"{num_combined_jobs} other jobs (combined)",
+            f"Number of seeds: {len(jobs)}",
+            f"Test duration (all seeds combined): {format_time_metric(test.duration)}",
+            f"Test ranking (all seeds combined): {rank_str}",
+            f"Combined Duration: {format_time_metric(total_duration)}",
+            f"Mean Duration: {format_time_metric(avg_duration)}",
+            f"Maximum Duration: {format_time_metric(max_duration)}",
+            f"Minimum Duration: {format_time_metric(min_duration)}",
+        ]
+        hover = make_job_metadata_hover(test.name, extra_timing_info, meta)
+
+        return total_duration, hover
+
+    def _make_trace(
+        self,
+        results: InstrumentationResults,
+        test_info: list[TestAggregateInfo],
+        color_map: dict[str, str],
+    ) -> go.Bar:
+        """Get a plotly bar trace for a group of tests using some defined color mapping."""
+        max_ordinal = max(test.ordinal for test in test_info)
+        ordinal_len = len(str(max_ordinal))
+
+        job_names, durations, hovers, marker_colors = [], [], [], []
+        for test in test_info:
+            # Display jobs within groups shortest to longest (shortest bars first)
+            jobs = list(reversed(test.jobs))
+            first_job = results.jobs[jobs[0]]
+            marker_color = self._get_job_color(color_map, first_job, test.name)
+
+            # Due to a limitation in plotly's presentation, we cannot have auto tick scaling
+            # (which is needed for the size of our data) with tickmode="array", which we also
+            # need to be able to provide custom names, because job IDs are too long.
+            # To work around this, we define shortened names that are guaranteed to be unique,
+            # by prefixing them with their ordinal position (ranking).
+            id_prefix = (
+                test.name
+                if len(test.name) < self.MAX_NAME_CHARS
+                else test.name[: self.MAX_NAME_CHARS - 3] + "..."
+            )
+            display_name = f"{test.ordinal:0{ordinal_len}d}: {id_prefix} "
+
+            # It's too slow & too much data to display all the bars. Combine the smallest ones.
+            max_jobs = self.max_jobs_per_bar or len(jobs)
+            num_combined_jobs = len(jobs) - max_jobs + 1
+            if num_combined_jobs <= 1:
+                num_combined_jobs = 0
+
+            if num_combined_jobs > 1:
+                meta = results.jobs[jobs[0]].meta
+                duration, hover = self._make_combined_bar_info(test, jobs[:num_combined_jobs], meta)
+                job_names.append(display_name)
+                durations.append(duration)
+                hovers.append(hover)
+                marker_colors.append(marker_color)
+
+            # Render the remainder of the jobs in full detail
+            for job_id in jobs[num_combined_jobs:]:
+                timings = test.timings[job_id]
+
+                extra_timing_info = {}
+                if self.group_tests:
+                    rank_str = f"{test.ordinal}{ordinal_suffix(test.ordinal)} longest"
+                    extra_timing_info.update(
+                        {
+                            "number of seeds": str(len(jobs)),
+                            "test duration (all seeds combined)": format_time_metric(test.duration),
+                            "test ranking (all seeds combined)": rank_str,
+                        }
+                    )
+                extra_timing_info["duration"] = format_time_metric(timings.duration)
+                meta = results.jobs[job_id].meta
+                hover = make_job_metadata_hover(job_id, extra_timing_info, meta)
+
+                job_names.append(display_name)
+                durations.append(timings.duration)
+                hovers.append(hover)
+                marker_colors.append(marker_color)
+
+        return go.Bar(
+            orientation="h",
+            x=durations,
+            y=job_names,
+            customdata=hovers,
+            marker_color=marker_colors,
+            hovertemplate="%{customdata}<extra></extra>",
+            # traces are all hidden by default
+            visible=False,
+        )
+
+    def _trace_visibility(self, num_traces: int, trace_idx: int) -> list[bool]:
+        """Get trace visibility as a plotly updatemenu button callback for per-group tracing."""
+        return [i == trace_idx for i in range(num_traces)]
+
+    def render(self, results: InstrumentationResults) -> str | None:
+        """Render a bar chart from the instrumentation results as a HTML fragment.
+
+        If the required job timing (and optionally the metadata) information is not available,
+        or there are no jobs, this just returns `None` instead.
+
+        """
+        if not self.allow_missing_meta and all(job.meta is None for job in results.jobs.values()):
+            return None
+
+        # Group jobs into tests if configured to do so, and compute relevant aggregate information.
+        # Tests are ordered by decreasing duration.
+        tests = self._compute_test_aggregates(results)
+        num_tests = len(tests)
+        if num_tests == 0:
+            return None
+
+        # Determine item limits & title formatting from the configured max bars & grouping.
+        item_type = "tests" if self.group_tests else "jobs"
+        if self.max_bars is None or num_tests <= self.max_bars:
+            num_visible = num_tests
+            title_item_desc = f"{num_tests:,} {item_type}"
+        else:
+            num_visible = self.max_bars
+            title_item_desc = f"top {num_visible} of {num_tests} {item_type}"
+
+        # Bin the tests by category (up to top `num_visible` for each). Ensure that the 'All'
+        # category is always ordered first.
+        top_by_category = self._get_top_tests_by_category(results, tests, num_visible)
+        categories = sorted(top_by_category, key=lambda c: (c != self.ALL_KEY, c))
+        num_categories = len(categories)
+
+        if self.color_fn is not None:
+            color_map = {key: self.color_fn(key) for key in categories}
+        else:
+            color_map = make_repeating_color_map(sorted(categories), pc.qualitative.Plotly)
+
+        # Create a bar trace and visibility toggle menu button for each category.
+        traces: list[go.Bar] = []
+        menu_buttons: list[dict[str, Any]] = []
+        for i, key in enumerate(categories):
+            test_info = [tests[test_group] for test_group in top_by_category[key]]
+            traces.append(self._make_trace(results, test_info, color_map))
+            menu_buttons.append(
+                {
+                    "label": key,
+                    "method": "update",
+                    "args": [{"visible": self._trace_visibility(num_categories, i)}],
+                }
+            )
+        traces[0].visible = True
+
+        # Hack: display buttons for <= some arbitrary threshold, otherwise a dropdown.
+        # A better solution would dynamically determine the type based on the contents & layout.
+        updatemenu_type, updatemenu_direction = (
+            ("buttons", "right")
+            if num_categories <= self.DROPDDOWN_KEY_THRESHOLD
+            else ("dropdown", "down")
+        )
+
+        # Create the final figure from the constructed list of traces & buttons.
+        # Configure extra layout / formatting settings.
+        fig = go.Figure(data=traces)
+        fig.update_layout(
+            template="plotly_white",
+            showlegend=False,
+            title_text=f"<b>{item_type.capitalize()} by longest duration ({title_item_desc})</b>",
+            title_xanchor="center",
+            title_y=0.97,
+            title_x=0.5,
+            margin=self.margins,
+            height=DEFAULT_VISUALIZATION_HEIGHT_PX,
+            bargap=0.05,
+        )
+        fig.update_yaxes(autorange="reversed")
+
+        duration_config = PLOTLY_TIMING_AXIS_CONFIG.copy()
+        duration_config["title"] = "Duration (s)"
+        fig.update_xaxes(showgrid=True, **duration_config)
+
+        # Only render the 'All' button if we have at least 2 other categories to render
+        if len(menu_buttons[1:]) == 1:
+            menu_buttons = menu_buttons[1:]
+        if menu_buttons:
+            fig.update_layout(
+                updatemenus=[
+                    {
+                        "buttons": menu_buttons,
+                        "type": updatemenu_type,
+                        "direction": updatemenu_direction,
+                        "showactive": True,
+                        # Arbitrary positioning that tends to render well
+                        "x": 0.0,
+                        "xanchor": "left",
+                        "y": 1.055,
+                        "bgcolor": "rgba(230,230,230,0.9)",
+                        "bordercolor": "rgba(0,0,0,0)",
+                        "borderwidth": 0,
+                        "pad": {"r": 8, "t": 0, "b": 0},
+                        "font_size": 13,
+                    }
+                ],
+            )
+
+        # Assume figure is never large enough to render to PNG because we control the limit here.
+        return fig.to_html(**PLOTLY_HTML_FRAGMENT_CONFIG)
+
+
+class LongestByStatusChart(LongestBarChart):
+    """Renders plotly bar chart figures ranking the longest jobs, optionally split by status."""
 
     def __init__(self, *, max_bars: int | None = None) -> None:
-        """TODO"""
+        """Construct a LongestJobsByStatusChart.
+
+        Args:
+            max_bars: The maximum number of bars to show for each status (and overall).
+
+        """
         super().__init__(
             max_bars=max_bars,
             category_fn=self._get_job_status,
@@ -897,13 +1013,11 @@ class LongestJobsByStatusVisualization(LongestTestsVisualization):
         )
 
     def _get_job_status(self, job: JobInstrumentationResults) -> str:
-        """TODO"""
-        if job.meta is None:
-            return None
-        return job.meta.status
+        """Get the status from a job's recorded metadata, or 'Unknown' if it does not exist."""
+        return "Unknown" if job.meta is None else job.meta.status
 
     def _get_status_color(self, status: str) -> str:
-        """TODO"""
+        """Get the (hex code string) color that a given job status should render with."""
         # TODO: can I get the status enum working in the Pydantic models so I can use it directly?
         color_mapping = {
             "Passed": "#04B34F",
@@ -913,50 +1027,64 @@ class LongestJobsByStatusVisualization(LongestTestsVisualization):
         return color_mapping.get(status, "#808080")
 
 
-class LongestJobsByToolVisualization(LongestTestsVisualization):
-    """TODO"""
-
-    title = "Longest Jobs by Tool"
+class LongestByToolChart(LongestBarChart):
+    """Renders plotly bar chart figures ranking the longest jobs, partitioned by tool."""
 
     def __init__(
         self,
         *,
+        group_tests: bool = False,
         max_bars: int | None = None,
         max_jobs_per_bar: int | None = None,
-        group_tests: bool = False,
     ) -> None:
-        """TODO"""
-        if group_tests:
-            self.title = "Longest Tests by Tool"
+        """Construct a LongestByToolChart.
+
+        Args:
+            group_tests: Flag to group jobs of the same test by name. This allows timing results
+              for the same tests to be combined in a stacked bar view.
+            max_bars: The maximum number of bars to show for each tool (and overall).
+            max_jobs_per_bar: If group_tests=True, the maximum number of stacked bars to
+              render per bar. If there are too many bars to display, the bottom
+              (N - max_jobs_per_bar + 1) jobs will be combined into a single bar.
+
+        """
+        self.title = f"Longest {'Tests' if group_tests else 'Jobs'} by Tool"
+
         super().__init__(
+            group_tests=group_tests,
+            category_fn=self._get_job_tool,
             max_bars=max_bars,
             max_jobs_per_bar=max_jobs_per_bar,
-            category_fn=self._get_job_tool,
-            group_tests=group_tests,
         )
 
     def _get_job_tool(self, job: JobInstrumentationResults) -> str:
-        """TODO"""
-        if job.meta is None:
-            return "Unknown"
-        return job.meta.tool
+        """Get the tool from a job's recorded metadata, or 'Unknown' if it does not exist."""
+        return "Unknown" if job.meta is None else job.meta.tool
 
 
-class LongestJobsByBlockVisualization(LongestTestsVisualization):
-    """TODO"""
-
-    title = "Longest Jobs by Block"
+class LongestByBlockChart(LongestBarChart):
+    """Renders plotly bar charts ranking the longest jobs, partitioned by block."""
 
     def __init__(
         self,
         *,
+        group_tests: bool = False,
         max_bars: int | None = None,
         max_jobs_per_bar: int | None = None,
-        group_tests: bool = False,
     ) -> None:
-        """TODO"""
-        if group_tests:
-            self.title = "Longest Tests by Block"
+        """Construct a LongestByBlockChart.
+
+        Args:
+            group_tests: Flag to group jobs of the same test by name. This allows timing results
+              for the same tests to be combined in a stacked bar view.
+            max_bars: The maximum number of bars to show for each block (and overall).
+            max_jobs_per_bar: If group_tests=True, the maximum number of stacked bars to
+              render per bar. If there are too many bars to display, the bottom
+              (N - max_jobs_per_bar + 1) jobs will be combined into a single bar.
+
+        """
+        self.title = f"Longest {'Tests' if group_tests else 'Jobs'} by Block"
+
         super().__init__(
             max_bars=max_bars,
             max_jobs_per_bar=max_jobs_per_bar,
@@ -965,10 +1093,8 @@ class LongestJobsByBlockVisualization(LongestTestsVisualization):
         )
 
     def _get_job_block(self, job: JobInstrumentationResults) -> str:
-        """TODO"""
-        if job.meta is None:
-            return "Unknown"
-        return job.meta.block
+        """Get the block from a job's recorded metadata, or 'Unknown' if it does not exist."""
+        return "Unknown" if job.meta is None else job.meta.block
 
 
 # Default height in pixels for a usage/concurrency chart visualization
@@ -1127,13 +1253,13 @@ class BreakdownVisualization:
 
     title = "Job Breakdown"
 
-    # Standard layout & formatting configurations
+    # Standard layout & formatting configuration
     MIN_PIE_HEIGHT_PX: int = 600
     MAX_BAR_PX: int = 50
-    PIE_LABEL_THRESHOLD: float = 0.01  # (percentage in [0,1], i.e. 1%)
+    PIE_LABEL_THRESHOLD: float = 0.02  # (percentage in [0,1], i.e. 2%)
     PIE_HOLE_FRACTION: float = 0.6
     PIE_SEGMENT_PULL: float = 0.03
-    SUBPLOT_SPACING: float = 0.07
+    SUBPLOT_SPACING: float = 0.12
 
     def __init__(
         self, *, group_type: str, group_fn: Callable[[JobInstrumentationResults], str]
@@ -1268,7 +1394,8 @@ class BreakdownVisualization:
         fig.update_layout(
             template="plotly_white",
             title_text=f"<b>Total job runtime per {self.group_type.lower()}</b>",
-            title_x=0.5,
+            title_x=0.125,
+            title_xanchor="left",
             margin=self.margins,
             height=total_height,
             bargap=0.1,
@@ -1363,15 +1490,15 @@ def get_standard_instrumentations(*, uncapped: bool = False) -> list[Instrumenta
     """TODO"""
     # TODO: this uncapped stuff is a mess, figure out a nicer way.
     return [
-        LongestJobsByStatusVisualization(max_bars=(None if uncapped else 250)),
-        LongestJobsByToolVisualization(max_bars=(None if uncapped else 250)),
-        LongestJobsByToolVisualization(
+        LongestByStatusChart(max_bars=(None if uncapped else 250)),
+        LongestByToolChart(max_bars=(None if uncapped else 250)),
+        LongestByToolChart(
             group_tests=True,
             max_bars=(None if uncapped else 75),
             max_jobs_per_bar=(None if uncapped else 6),
         ),
-        LongestJobsByBlockVisualization(max_bars=(None if uncapped else 50)),
-        LongestJobsByBlockVisualization(
+        LongestByBlockChart(max_bars=(None if uncapped else 50)),
+        LongestByBlockChart(
             group_tests=True,
             max_bars=(None if uncapped else 20),
             max_jobs_per_bar=(None if uncapped else 6),

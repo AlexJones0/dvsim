@@ -32,13 +32,13 @@ class BreakdownVisualization:
 
     title = "Job Breakdown"
 
-    # Standard layout & formatting configurations
+    # Standard layout & formatting configuration
     MIN_PIE_HEIGHT_PX: int = 600
     MAX_BAR_PX: int = 50
-    PIE_LABEL_THRESHOLD: float = 0.01  # (percentage in [0,1], i.e. 1%)
+    PIE_LABEL_THRESHOLD: float = 0.02  # (percentage in [0,1], i.e. 2%)
     PIE_HOLE_FRACTION: float = 0.6
     PIE_SEGMENT_PULL: float = 0.03
-    SUBPLOT_SPACING: float = 0.07
+    SUBPLOT_SPACING: float = 0.12
 
     def __init__(
         self, *, group_type: str, group_fn: Callable[[JobInstrumentationResults], str]
@@ -46,7 +46,7 @@ class BreakdownVisualization:
         """Construct a BreakdownVisualization.
 
         Args:
-            group_type: The name of the groupings (categorial type) being split on.
+            group_type: The name of the groupings (categorical type) being split on.
             group_fn: A function for splitting jobs into unique groups (returns a string category).
 
         """
@@ -173,7 +173,8 @@ class BreakdownVisualization:
         fig.update_layout(
             template="plotly_white",
             title_text=f"<b>Total job runtime per {self.group_type.lower()}</b>",
-            title_x=0.5,
+            title_x=0.125,
+            title_xanchor="left",
             margin=self.margins,
             height=total_height,
             bargap=0.1,

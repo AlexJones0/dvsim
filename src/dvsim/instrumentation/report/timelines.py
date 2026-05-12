@@ -91,7 +91,7 @@ class TimelineBarChart:
         assignments: dict[str, int] = {}  # assignments of (job ID -> slot ID)
         next_slot_id: int = 0
 
-        # Greedy assignment (same approach as interval partitioning problem)
+        # Greedy assignment, take the last known free slot.
         for job_id, timing in jobs_by_start_time:
             if timing.start_time is None or timing.end_time is None:
                 continue
