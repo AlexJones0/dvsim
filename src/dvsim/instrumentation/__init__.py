@@ -17,6 +17,7 @@ from dvsim.instrumentation.runtime import (
     flush,
     gen_html_report,
     get,
+    get_report,
     set_instrumentation,
     set_report_path,
 )
@@ -33,6 +34,7 @@ __all__ = (
     "flush",
     "gen_html_report",
     "get",
+    "get_report",
     "set_instrumentation",
     "set_report_path",
 )

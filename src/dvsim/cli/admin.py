@@ -106,9 +106,7 @@ def report_gen(json_path: Path, output_dir: Path) -> None:
     type=click.Choice([e.value for e in RenderProfile], case_sensitive=False),
     help="Set the rendering profile to control the detail vs. report optimization",
 )
-def instrumentation_report_gen(
-    json_path: Path, output_dir: Path, profile: str | None
-) -> None:
+def instrumentation_report_gen(json_path: Path, output_dir: Path, profile: str | None) -> None:
     """Generate an instrumentation report from an existing metrics JSON."""
     from dvsim.instrumentation import gen_html_report  # noqa: PLC0415
     from dvsim.instrumentation.records import InstrumentationResults  # noqa: PLC0415

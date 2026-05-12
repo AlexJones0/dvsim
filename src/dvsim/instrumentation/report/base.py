@@ -121,7 +121,7 @@ def render_html_report(
         )
         render = vis.render(results)
         if render is not None:
-            log.debug("Rendered instrumentation visualization: %s", vis.title)
+            log.info("Rendered instrumentation visualization: %s", vis.title)
             renders.append((vis, render))
 
     if outdir is not None:
@@ -134,7 +134,9 @@ def render_html_report(
         path="reports/instrumentation_report.html", data={"renders": renders}
     )
     if outdir is not None:
-        (outdir / "metrics.html").write_text(artifacts["metrics.html"])
+        report_path = outdir / "metrics.html"
+        report_path.write_text(artifacts["metrics.html"])
+        log.info("HTML instrumentation report written to %s", report_path)
 
     # Render static content needed for the report
     artifacts.update(
