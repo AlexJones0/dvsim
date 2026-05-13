@@ -12,6 +12,7 @@ from typing import Any, Protocol
 
 from tabulate import tabulate
 
+from dvsim import instrumentation
 from dvsim.logging import log
 from dvsim.report.artifacts import ReportArtifacts, display_report, render_static_content
 from dvsim.report.data import IPMeta
@@ -125,13 +126,16 @@ class HtmlReportRenderer:
             if outdir is not None:
                 (outdir / block_file).write_text(artifacts[block_file])
 
+        # If instrumentation report data is available, we should also link to that generated report
+        instrumentation_report = None if instrumentation.get_report() is None else "metrics.html"
+
         # Regardless of whether we have a top or there is only one block, we always generate a
         # summary page for now.
         top_log_suffix = "" if summary.top is None else f" for {summary.top.name}"
         log.debug("Generating HTML summary report%s", top_log_suffix)
         artifacts["index.html"] = render_template(
             path="reports/summary_report.html",
-            data={"summary": summary},
+            data={"summary": summary, "instrumentation_report": instrumentation_report},
         )
         if outdir is not None:
             (outdir / "index.html").write_text(artifacts["index.html"])
